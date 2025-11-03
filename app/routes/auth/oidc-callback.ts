@@ -81,7 +81,7 @@ export async function loader({
 			.values({
 				id: ulid(),
 				sub: user.subject,
-				caps: userCount === 0 ? Roles.owner : Roles.member,
+				caps: userCount === 0 ? Roles.owner : Roles.admin,
 			})
 			.onConflictDoNothing();
 
