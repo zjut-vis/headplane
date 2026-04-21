@@ -16,7 +16,6 @@ import type { HeadplaneSSH } from "./wasm.client";
 import { loadHeadplaneWASM } from "./wasm.client";
 
 const WASM_MODULE_URL = `${__PREFIX__}/hp_ssh.wasm`;
-const WASM_HELPER_URL = `${__PREFIX__}/wasm_exec.js`;
 const WASM_MODULE_ASSET_PATH = "/hp_ssh.wasm";
 const WASM_HELPER_ASSET_PATH = "/wasm_exec.js";
 
@@ -25,21 +24,6 @@ export const shouldRevalidate: ShouldRevalidateFunction = () => {
 };
 
 export async function loader({ request, params, context }: Route.LoaderArgs) {
-  const origin = new URL(request.url).origin;
-  const assets = [WASM_HELPER_URL, WASM_MODULE_URL];
-  const missing: string[] = [];
-
-  for (const file of assets) {
-    const res = await fetch(`${origin}${file}`, { method: "HEAD" });
-    if (!res.ok) {
-      missing.push(file);
-    }
-  }
-
-  if (missing.length > 0) {
-    throw data(sshErrors.wasm_missing, 405);
-  }
-
   if (context.agents == null) {
     throw data(sshErrors.agent_required, 400);
   }
@@ -165,40 +149,61 @@ function SSHConsole({
   const [ssh, setSsh] = useState<HeadplaneSSH | null>(null);
   const [connected, setConnected] = useState(false);
   const [status, setStatus] = useState("Starting tunnel…");
+  const [wasmError, setWasmError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
 
     console.log("[ssh] Loading WASM factory");
-    loadHeadplaneWASM(WASM_MODULE_URL).then((create) => {
-      console.log("[ssh] Factory loaded, creating IPN", create);
+    loadHeadplaneWASM(WASM_MODULE_URL)
+      .then((create) => {
+        console.log("[ssh] Factory loaded, creating IPN", create);
 
-      if (cancelled) {
-        return;
-      }
+        if (cancelled) {
+          return;
+        }
 
-      setStatus("Joining Tailnet…");
-      const instance = create({
-        controlURL: node.controlURL,
-        preAuthKey: node.preAuthKey,
-        hostname: node.ephemeralHostname,
-        onReady: () => {
-          console.log("[ssh] IPN ready (Running)");
-          if (!cancelled) {
-            setStatus(`Connecting to ${hostname}…`);
-            setSsh(instance);
-          }
-        },
-        onError: (msg) => console.error("[ssh] IPN error:", msg),
+        setStatus("Joining Tailnet…");
+        const instance = create({
+          controlURL: node.controlURL,
+          preAuthKey: node.preAuthKey,
+          hostname: node.ephemeralHostname,
+          onReady: () => {
+            console.log("[ssh] IPN ready (Running)");
+            if (!cancelled) {
+              setStatus(`Connecting to ${hostname}…`);
+              setSsh(instance);
+            }
+          },
+          onError: (msg) => {
+            console.error("[ssh] IPN error:", msg);
+            if (!cancelled) {
+              setWasmError(msg);
+            }
+          },
+        });
+
+        console.log("[ssh] IPN instance created", instance);
+      })
+      .catch((error) => {
+        console.error("[ssh] Failed to load WASM:", error);
+        if (!cancelled) {
+          setWasmError(error instanceof Error ? error.message : String(error));
+        }
       });
-
-      console.log("[ssh] IPN instance created", instance);
-    });
 
     return () => {
       cancelled = true;
     };
   }, [node]);
+
+  if (wasmError) {
+    return (
+      <div className="flex h-screen w-screen items-center justify-center bg-black p-4">
+        <SSHErrorBoundary {...sshErrors.wasm_missing} />
+      </div>
+    );
+  }
 
   return (
     <div className="fixed inset-0 flex flex-col bg-black">
