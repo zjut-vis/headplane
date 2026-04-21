@@ -1,74 +1,122 @@
-import { Ellipsis } from 'lucide-react';
-import { useState } from 'react';
-import Menu from '~/components/Menu';
-import type { Machine, User } from '~/types';
-import cn from '~/utils/cn';
-import Delete from '../dialogs/delete-user';
-import Reassign from '../dialogs/reassign-user';
-import Rename from '../dialogs/rename-user';
+import { Ellipsis } from "lucide-react";
+import { useState } from "react";
+
+import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "~/components/menu";
+
+import Delete from "../dialogs/delete-user";
+import LinkUser from "../dialogs/link-user";
+import Reassign from "../dialogs/reassign-user";
+import TransferOwnership from "../dialogs/transfer-ownership";
+import type { HeadplaneUserData } from "../overview";
 
 interface MenuProps {
-	user: User & {
-		headplaneRole: string;
-		machines: Machine[];
-	};
+  user: HeadplaneUserData;
+  headscaleUsers: { id: string; name: string; claimed: boolean }[];
+  currentLink?: string;
+  isSelf?: boolean;
+  isOwner?: boolean;
 }
 
-type Modal = 'rename' | 'delete' | 'reassign' | null;
+type Modal = "delete" | "reassign" | "link" | "transfer" | null;
 
-export default function UserMenu({ user }: MenuProps) {
-	const [modal, setModal] = useState<Modal>(null);
-	return (
-		<>
-			{modal === 'rename' && (
-				<Rename
-					isOpen={modal === 'rename'}
-					setIsOpen={(isOpen) => {
-						if (!isOpen) setModal(null);
-					}}
-					user={user}
-				/>
-			)}
-			{modal === 'delete' && (
-				<Delete
-					isOpen={modal === 'delete'}
-					setIsOpen={(isOpen) => {
-						if (!isOpen) setModal(null);
-					}}
-					user={user}
-				/>
-			)}
-			{modal === 'reassign' && (
-				<Reassign
-					isOpen={modal === 'reassign'}
-					setIsOpen={(isOpen) => {
-						if (!isOpen) setModal(null);
-					}}
-					user={user}
-				/>
-			)}
+export default function UserMenu({
+  user,
+  headscaleUsers,
+  currentLink,
+  isSelf,
+  isOwner,
+}: MenuProps) {
+  const [modal, setModal] = useState<Modal>(null);
 
-			<Menu disabledKeys={user.provider === 'oidc' ? ['rename'] : ['reassign']}>
-				<Menu.IconButton
-					className={cn(
-						'py-0.5 w-10 bg-transparent border-transparent',
-						'border group-hover:border-headplane-200',
-						'dark:group-hover:border-headplane-700',
-					)}
-					label="Machine Options"
-				>
-					<Ellipsis className="h-5" />
-				</Menu.IconButton>
-				<Menu.Panel onAction={(key) => setModal(key as Modal)}>
-					<Menu.Section>
-						<Menu.Item key="rename">Rename user</Menu.Item>
-						<Menu.Item key="reassign">Change role</Menu.Item>
-						<Menu.Item key="delete" textValue="Delete">
-							<p className="text-red-500 dark:text-red-400">Delete</p>
-						</Menu.Item>
-					</Menu.Section>
-				</Menu.Panel>
-			</Menu>
-		</>
-	);
+  const isLinked = currentLink !== undefined;
+  const disabledKeys: string[] = [];
+  if (!isLinked) {
+    disabledKeys.push("reassign");
+  }
+
+  // Filter linkable users: unclaimed, or the one currently linked to this user
+  const linkableUsers = headscaleUsers.filter((u) => !u.claimed || u.id === currentLink);
+
+  const displayName = user.linkedHeadscaleUser?.displayName || user.name || user.email || user.sub;
+
+  return (
+    <>
+      {modal === "delete" && user.linkedHeadscaleUser && (
+        <Delete
+          isOpen={modal === "delete"}
+          machines={user.machines}
+          setIsOpen={(isOpen) => {
+            if (!isOpen) setModal(null);
+          }}
+          user={user.linkedHeadscaleUser}
+        />
+      )}
+      {modal === "reassign" && (
+        <Reassign
+          displayName={displayName}
+          isOpen={modal === "reassign"}
+          role={user.role}
+          setIsOpen={(isOpen) => {
+            if (!isOpen) setModal(null);
+          }}
+          userId={user.linkedHeadscaleUser?.id ?? user.id}
+        />
+      )}
+      {modal === "link" && (
+        <LinkUser
+          currentLink={currentLink}
+          displayName={displayName}
+          headscaleUsers={linkableUsers}
+          isOpen={modal === "link"}
+          setIsOpen={(isOpen) => {
+            if (!isOpen) setModal(null);
+          }}
+          userId={user.linkedHeadscaleUser?.id ?? user.id}
+        />
+      )}
+      {modal === "transfer" && (
+        <TransferOwnership
+          isOpen={modal === "transfer"}
+          setIsOpen={(isOpen) => {
+            if (!isOpen) setModal(null);
+          }}
+          targetDisplayName={displayName}
+          targetUserId={user.linkedHeadscaleUser?.id ?? user.id}
+        />
+      )}
+
+      <Menu>
+        <MenuTrigger className="w-10 rounded-full bg-transparent p-1 py-0.5 hover:bg-mist-100 dark:hover:bg-mist-800">
+          <Ellipsis className="h-5" />
+        </MenuTrigger>
+        <MenuContent>
+          <MenuItem
+            disabled={disabledKeys.includes("reassign")}
+            onClick={() => setModal("reassign")}
+          >
+            Change role
+          </MenuItem>
+          <MenuItem onClick={() => setModal("link")}>
+            {isLinked ? "Change linked user" : "Link Headscale user"}
+          </MenuItem>
+          {isOwner && !isSelf && (
+            <>
+              <MenuSeparator />
+              <MenuItem variant="danger" onClick={() => setModal("transfer")}>
+                Transfer ownership
+              </MenuItem>
+            </>
+          )}
+          {user.linkedHeadscaleUser && !isSelf && (
+            <>
+              <MenuSeparator />
+              <MenuItem variant="danger" onClick={() => setModal("delete")}>
+                Delete
+              </MenuItem>
+            </>
+          )}
+        </MenuContent>
+      </Menu>
+    </>
+  );
 }

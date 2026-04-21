@@ -1,31 +1,54 @@
-import { Key, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useFetcher } from "react-router";
 
+import Button from "~/components/button";
+import CodeBlock from "~/components/code-block";
+import Dialog, { DialogPanel } from "~/components/dialog";
+import Input from "~/components/input";
+import Link from "~/components/link";
+import NumberInput from "~/components/number-input";
+import Select from "~/components/select";
+import Switch from "~/components/switch";
+import Text from "~/components/text";
+import Title from "~/components/title";
 import type { User } from "~/types";
-
-import Button from "~/components/Button";
-import Code from "~/components/Code";
-import Dialog from "~/components/Dialog";
-import Input from "~/components/Input";
-import Link from "~/components/Link";
-import NumberInput from "~/components/NumberInput";
-import Select from "~/components/Select";
-import Switch from "~/components/Switch";
-import toast from "~/utils/toast";
+import { getUserDisplayName } from "~/utils/user";
 
 interface AddAuthKeyProps {
   users: User[];
   url: string;
+  selfServiceOnly: boolean;
+  currentSubject?: string;
 }
 
-export default function AddAuthKey({ users, url }: AddAuthKeyProps) {
+function findCurrentUser(users: User[], subject: string | undefined): User | undefined {
+  if (!subject) {
+    return undefined;
+  }
+  return users.find((u) => {
+    if (u.provider !== "oidc" || !u.providerId) {
+      return false;
+    }
+    const segment = u.providerId.split("/").pop();
+    return segment ? decodeURIComponent(segment) === subject : false;
+  });
+}
+
+export default function AddAuthKey({
+  users,
+  url,
+  selfServiceOnly,
+  currentSubject,
+}: AddAuthKeyProps) {
   const fetcher = useFetcher();
   const submittingRef = useRef(false);
   const [isOpen, setIsOpen] = useState(false);
   const [reusable, setReusable] = useState(false);
   const [ephemeral, setEphemeral] = useState(false);
   const [tagOnly, setTagOnly] = useState(false);
-  const [userId, setUserId] = useState<Key | null>(users[0]?.id);
+  const currentUser = selfServiceOnly ? findCurrentUser(users, currentSubject) : null;
+  const availableUsers = selfServiceOnly && currentUser ? [currentUser] : users;
+  const [userId, setUserId] = useState<string | null>(availableUsers[0]?.id);
   const [tags, setTags] = useState("");
 
   const createdKey = fetcher.data?.success ? fetcher.data.key : null;
@@ -41,7 +64,7 @@ export default function AddAuthKey({ users, url }: AddAuthKeyProps) {
       setReusable(false);
       setEphemeral(false);
       setTagOnly(false);
-      setUserId(users[0]?.id);
+      setUserId(availableUsers[0]?.id);
       setTags("");
       fetcher.data = undefined;
     }
@@ -59,39 +82,27 @@ export default function AddAuthKey({ users, url }: AddAuthKeyProps) {
     <Dialog
       isOpen={isOpen}
       onOpenChange={(open) => {
-        if (!open && submittingRef.current) return;
+        if (!open && submittingRef.current) {
+          return;
+        }
         setIsOpen(open);
       }}
     >
-      <Button className="my-4" onPress={() => setIsOpen(true)}>
+      <Button className="my-4" onClick={() => setIsOpen(true)}>
         Create pre-auth key
       </Button>
       {createdKey ? (
-        <Dialog.Panel variant="unactionable">
-          <Dialog.Title>Pre-auth key created</Dialog.Title>
-          <Dialog.Text>
-            Copy this key now. You will not be able to see the full key again.
-          </Dialog.Text>
-          <div className="bg-headplane-100 dark:bg-headplane-800 mt-4 flex items-center gap-2 rounded-lg px-3 py-2">
-            <code className="min-w-0 flex-1 truncate font-mono text-sm">{createdKey}</code>
-            <Button
-              className="shrink-0"
-              onPress={async () => {
-                await navigator.clipboard.writeText(createdKey);
-                toast("Copied key to clipboard");
-              }}
-              variant="light"
-            >
-              Copy
-            </Button>
-          </div>
-          <Dialog.Text className="mt-4 text-sm">To register a device with this key:</Dialog.Text>
-          <Code isCopyable className="mt-1 block text-sm">
+        <DialogPanel variant="unactionable">
+          <Title>Pre-auth key created</Title>
+          <Text>Copy this key now. You will not be able to see the full key again.</Text>
+          <CodeBlock className="mt-4">{createdKey}</CodeBlock>
+          <Text className="mt-4 text-sm">To register a device with this key:</Text>
+          <CodeBlock className="mt-1">
             {`tailscale up --login-server=${url} --authkey ${createdKey}`}
-          </Code>
-        </Dialog.Panel>
+          </CodeBlock>
+        </DialogPanel>
       ) : (
-        <Dialog.Panel
+        <DialogPanel
           onSubmit={(event) => {
             event.preventDefault();
             submittingRef.current = true;
@@ -105,43 +116,47 @@ export default function AddAuthKey({ users, url }: AddAuthKeyProps) {
           }}
           isDisabled={fetcher.state !== "idle" || !canSubmit}
         >
-          <Dialog.Title>Generate auth key</Dialog.Title>
+          <Title>Generate auth key</Title>
 
-          <div className="mb-4 flex items-center justify-between gap-2">
-            <div>
-              <Dialog.Text className="font-semibold">Tag-only key</Dialog.Text>
-              <Dialog.Text className="text-sm">
-                Create a key owned by ACL tags instead of a user.
-              </Dialog.Text>
+          {!selfServiceOnly && (
+            <div className="mb-4 flex items-center justify-between gap-2">
+              <div>
+                <Text className="font-semibold">Tag-only key</Text>
+                <Text className="text-sm">Create a key owned by ACL tags instead of a user.</Text>
+              </div>
+              <Switch
+                defaultChecked={tagOnly}
+                label="Tag-only"
+                onCheckedChange={() => setTagOnly(!tagOnly)}
+              />
             </div>
-            <Switch
-              defaultSelected={tagOnly}
-              label="Tag-only"
-              onChange={() => setTagOnly(!tagOnly)}
-            />
-          </div>
+          )}
 
           {!tagOnly && (
             <Select
               className="mb-2"
-              description="Machines will belong to this user when they authenticate."
-              isRequired
+              description={
+                selfServiceOnly
+                  ? "You can only create keys for your own user."
+                  : "Machines will belong to this user when they authenticate."
+              }
+              disabled={selfServiceOnly}
+              required
               label="User"
-              onSelectionChange={(value) => setUserId(value)}
+              onValueChange={(value) => setUserId(value)}
               placeholder="Select a user"
-            >
-              {users.map((user) => (
-                <Select.Item key={user.id}>
-                  {user.name || user.displayName || user.email || user.id}
-                </Select.Item>
-              ))}
-            </Select>
+              value={userId}
+              items={availableUsers.map((user) => ({
+                value: user.id,
+                label: getUserDisplayName(user),
+              }))}
+            />
           )}
 
           <Input
             className="mb-2"
             description="Comma-separated tags (e.g. server, prod). The tag: prefix is added automatically."
-            isRequired={tagOnly}
+            required={tagOnly}
             label="ACL Tags"
             onChange={(value) => setTags(value)}
             placeholder="server, prod"
@@ -150,51 +165,41 @@ export default function AddAuthKey({ users, url }: AddAuthKeyProps) {
           <NumberInput
             defaultValue={90}
             description="Set this key to expire after a certain number of days."
-            formatOptions={{
-              style: "unit",
-              unit: "day",
-              unitDisplay: "short",
-            }}
-            isRequired
+            required
             label="Key Expiration"
-            maxValue={365_000}
-            minValue={1}
+            max={365_000}
+            min={1}
             name="expiry"
           />
           <div className="mt-6 flex items-center justify-between gap-2">
             <div>
-              <Dialog.Text className="font-semibold">Reusable</Dialog.Text>
-              <Dialog.Text className="text-sm">
-                Use this key to authenticate more than one device.
-              </Dialog.Text>
+              <Text className="font-semibold">Reusable</Text>
+              <Text className="text-sm">Use this key to authenticate more than one device.</Text>
             </div>
             <Switch
-              defaultSelected={reusable}
+              defaultChecked={reusable}
               label="Reusable"
-              onChange={() => setReusable(!reusable)}
+              onCheckedChange={() => setReusable(!reusable)}
             />
           </div>
           <div className="mt-6 flex items-center justify-between gap-2">
             <div>
-              <Dialog.Text className="font-semibold">Ephemeral</Dialog.Text>
-              <Dialog.Text className="text-sm">
+              <Text className="font-semibold">Ephemeral</Text>
+              <Text className="text-sm">
                 Devices authenticated with this key will be automatically removed once they go
                 offline.{" "}
-                <Link
-                  name="Tailscale Ephemeral Nodes Documentation"
-                  to="https://tailscale.com/kb/1111/ephemeral-nodes"
-                >
+                <Link external styled to="https://tailscale.com/kb/1111/ephemeral-nodes">
                   Learn more
                 </Link>
-              </Dialog.Text>
+              </Text>
             </div>
             <Switch
-              defaultSelected={ephemeral}
+              defaultChecked={ephemeral}
               label="Ephemeral"
-              onChange={() => setEphemeral(!ephemeral)}
+              onCheckedChange={() => setEphemeral(!ephemeral)}
             />
           </div>
-        </Dialog.Panel>
+        </DialogPanel>
       )}
     </Dialog>
   );

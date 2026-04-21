@@ -1,9 +1,9 @@
 import { AlertCircle, CloudOff } from "lucide-react";
 
-import Card from "~/components/Card";
-import Code from "~/components/Code";
-import Link from "~/components/Link";
-import { OidcConnectorError } from "~/server/web/oidc-connector";
+import Card from "~/components/card";
+import Code from "~/components/code";
+import Link from "~/components/link";
+import type { OidcErrorCode } from "~/server/oidc/provider";
 
 export function OidcDiscoveryFailedNotice() {
   return (
@@ -20,7 +20,7 @@ export function OidcDiscoveryFailedNotice() {
   );
 }
 
-export function OidcConfigErrorNotice({ errors }: { errors: OidcConnectorError[] }) {
+export function OidcConfigErrorNotice({ errors }: { errors: OidcErrorCode[] }) {
   return (
     <Card className="m-4 mb-4 max-w-md border border-red-500 sm:m-0 sm:mb-4">
       <div className="flex items-center justify-between gap-4">
@@ -34,10 +34,7 @@ export function OidcConfigErrorNotice({ errors }: { errors: OidcConnectorError[]
             <li key={code.key}>{code.node}</li>
           ))}
         </ul>{" "}
-        <Link
-          name="Headplane OIDC Issues"
-          to="https://headplane.net/configuration/sso#troubleshooting"
-        >
+        <Link external styled to="https://headplane.net/features/sso#troubleshooting">
           Learn more
         </Link>
       </Card.Text>
@@ -45,7 +42,7 @@ export function OidcConfigErrorNotice({ errors }: { errors: OidcConnectorError[]
   );
 }
 
-function mapOidcErrorsToMessages(errors: OidcConnectorError[]) {
+function mapOidcErrorsToMessages(errors: OidcErrorCode[]) {
   const messages: {
     key: string;
     node: React.ReactNode;
@@ -53,77 +50,57 @@ function mapOidcErrorsToMessages(errors: OidcConnectorError[]) {
 
   for (const error of errors) {
     switch (error) {
-      case "INVALID_API_KEY":
+      case "invalid_api_key": {
         messages.push({
           key: error,
           node: (
             <Card.Text className="inline">
               The provided API key for OIDC authentication is invalid. Ensure that{" "}
-              <Code>oidc.headscale_api_key</Code> is a valid API key.
+              <Code>headscale.api_key</Code> is a valid API key.
             </Card.Text>
           ),
         });
         break;
+      }
 
-      case "MISSING_AUTHORIZATION_ENDPOINT":
+      case "missing_endpoints": {
         messages.push({
           key: error,
           node: (
             <Card.Text className="inline">
-              The OIDC provided does not have a configured <Code>authorization_endpoint</Code>.
-              Ensure discovery URL or manual configuration is correct.
+              The OIDC provider is missing required endpoints. Ensure the discovery URL is correct
+              or provide manual endpoint overrides in your configuration.
             </Card.Text>
           ),
         });
         break;
+      }
 
-      case "MISSING_TOKEN_ENDPOINT":
+      case "discovery_failed": {
         messages.push({
           key: error,
           node: (
             <Card.Text className="inline">
-              The OIDC provided does not have a configured <Code>token_endpoint</Code>. Ensure
-              discovery URL or manual configuration is correct.
+              Unable to reach the OIDC provider for discovery. SSO will retry on the next login
+              attempt.
             </Card.Text>
           ),
         });
         break;
+      }
 
-      case "MISSING_USERINFO_ENDPOINT":
+      default: {
         messages.push({
           key: error,
           node: (
             <Card.Text className="inline">
-              The OIDC provided does not have a configured <Code>user_endpoint</Code>. Ensure
-              discovery URL or manual configuration is correct.
+              An unknown OIDC configuration error occurred. Please check the Headplane logs for more
+              information.
             </Card.Text>
           ),
         });
         break;
-
-      case "MISSING_REQUIRED_CLAIMS":
-        messages.push({
-          key: error,
-          node: (
-            <Card.Text className="inline">
-              The OIDC provider does not support the <Code>sub</Code> claim, which is required for
-              authentication. Your OIDC provider may be misconfigured.
-            </Card.Text>
-          ),
-        });
-        break;
-
-      case "UNKNOWN_ERROR":
-        messages.push({
-          key: error,
-          node: (
-            <Card.Text className="inline">
-              An unknown error occurred during OIDC configuration. Please check the Headplane logs
-              for more information.
-            </Card.Text>
-          ),
-        });
-        break;
+      }
     }
   }
 

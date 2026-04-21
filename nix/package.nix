@@ -3,8 +3,10 @@
   headplane-ssh-wasm,
   lib,
   makeWrapper,
-  nodejs_22,
+  nodejs_24,
   pnpm_10,
+  fetchPnpmDeps,
+  pnpmConfigHook,
   stdenv,
 }: let
   pkg = builtins.fromJSON (builtins.readFile ../package.json);
@@ -19,17 +21,19 @@ in
 
     nativeBuildInputs = [
       makeWrapper
-      nodejs_22
-      pnpm_10.configHook
+      nodejs_24
+      pnpm_10
+      pnpmConfigHook
       git
     ];
 
     dontCheckForBrokenSymlinks = true;
 
-  pnpmDeps = pnpm_10.fetchDeps {
+  pnpmDeps = fetchPnpmDeps {
     inherit (finalAttrs) pname version src;
-		hash = "sha256-Xtooqpibv4fuJczUfJDlGt2+5KuoKq/TUUhLKE+ierA=";
-		fetcherVersion = 1;
+		fetcherVersion = 3;
+		pnpm = pnpm_10;
+		hash = "sha256-oJt5ysYXytwNR8Yx5nkEN++YQNaf9EO4fP4CPrChUPo=";
   };
 
     buildPhase = ''
@@ -44,10 +48,9 @@ in
       runHook preInstall
       mkdir -p $out/{bin,share/headplane}
       cp -r build $out/share/headplane/
-      cp -r node_modules $out/share/headplane/
       cp -r drizzle $out/share/headplane/
       sed -i "s;$PWD;../..;" $out/share/headplane/build/server/index.js
-      makeWrapper ${lib.getExe nodejs_22} $out/bin/headplane \
+      makeWrapper ${lib.getExe nodejs_24} $out/bin/headplane \
         --chdir $out/share/headplane \
         --add-flags $out/share/headplane/build/server/index.js
       runHook postInstall

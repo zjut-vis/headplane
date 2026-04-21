@@ -1,64 +1,68 @@
-import { useMemo, useState } from 'react';
-import Dialog from '~/components/Dialog';
-import Input from '~/components/Input';
+import { type } from "arktype";
+
+import Button from "~/components/button";
+import Dialog, { DialogPanel } from "~/components/dialog";
+import Input from "~/components/input";
+import Text from "~/components/text";
+import Title from "~/components/title";
+import { useForm } from "~/hooks/use-form";
+
+const domainSchema = type({
+  domain: "string > 0",
+});
 
 interface AddDomainProps {
-	domains: string[];
-	isDisabled?: boolean;
+  domains: string[];
+  isDisabled?: boolean;
 }
 
 export default function AddDomain({ domains, isDisabled }: AddDomainProps) {
-	const [domain, setDomain] = useState('');
+  const form = useForm({
+    schema: domainSchema,
+    validate: (values) => {
+      const domain = (values.domain as string).trim();
+      if (domain.length === 0) return undefined;
 
-	const isInvalid = useMemo(() => {
-		if (!domain || domain.trim().length === 0) {
-			// Empty domain is invalid, but no error shown
-			return false;
-		}
+      if (domains.includes(domain)) {
+        return { domain: "This domain already exists in the list." };
+      }
 
-		if (domains.includes(domain.trim())) {
-			return true;
-		}
+      try {
+        const url = new URL(`http://${domain}`);
+        if (url.hostname !== domain) {
+          return { domain: "This is not a valid domain." };
+        }
+      } catch {
+        return { domain: "This is not a valid domain." };
+      }
 
-		try {
-			// Check if domain is a valid FQDN
-			const url = new URL(`http://${domain.trim()}`);
-			return url.hostname !== domain.trim();
-		} catch (e) {
-			// If URL constructor fails, it's not a valid domain
-			return true;
-		}
-	}, [domain, domains]);
+      return undefined;
+    },
+  });
+  const domain = (form.values.domain as string).trim();
 
-	return (
-		<Dialog>
-			<Dialog.Button isDisabled={isDisabled}>Add domain</Dialog.Button>
-			<Dialog.Panel>
-				<Dialog.Title>Add domain</Dialog.Title>
-				<Dialog.Text className="mb-4">
-					Add this domain to a list of allowed email domains that can
-					authenticate with Headscale via OIDC.
-				</Dialog.Text>
-				<input name="action_id" type="hidden" value="add_domain" />
-				<Input
-					description={
-						domain.trim().length > 0
-							? `Matches users with <user>@${domain.trim()}`
-							: 'Enter a domain to match users with their email addresses.'
-					}
-					isInvalid={domain.trim().length === 0 || isInvalid}
-					isRequired
-					label="Domain"
-					name="domain"
-					onChange={setDomain}
-					placeholder="example.com"
-				/>
-				{isInvalid && (
-					<p className="text-red-500 text-sm mt-2">
-						The domain you entered is invalid or already exists in the list.
-					</p>
-				)}
-			</Dialog.Panel>
-		</Dialog>
-	);
+  return (
+    <Dialog>
+      <Button disabled={isDisabled}>Add domain</Button>
+      <DialogPanel>
+        <Title>Add domain</Title>
+        <Text className="mb-4">
+          Add this domain to a list of allowed email domains that can authenticate with Headscale
+          via OIDC.
+        </Text>
+        <input name="action_id" type="hidden" value="add_domain" />
+        <Input
+          {...form.field("domain")}
+          description={
+            domain.length > 0
+              ? `Matches users with <user>@${domain}`
+              : "Enter a domain to match users with their email addresses."
+          }
+          required
+          label="Domain"
+          placeholder="example.com"
+        />
+      </DialogPanel>
+    </Dialog>
+  );
 }

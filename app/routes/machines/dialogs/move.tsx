@@ -1,9 +1,11 @@
-import { Key, useState } from "react";
+import { useState } from "react";
 
+import Dialog, { DialogPanel } from "~/components/dialog";
+import Select from "~/components/select";
+import Text from "~/components/text";
+import Title from "~/components/title";
 import type { Machine, User } from "~/types";
-
-import Dialog from "~/components/Dialog";
-import Select from "~/components/Select";
+import { getUserDisplayName } from "~/utils/user";
 
 interface MoveProps {
   machine: Machine;
@@ -13,33 +15,31 @@ interface MoveProps {
 }
 
 export default function Move({ machine, users, isOpen, setIsOpen }: MoveProps) {
-  const [userId, setUserId] = useState<Key | null>(machine.user?.id ?? null);
+  const [userId, setUserId] = useState<string | null>(machine.user?.id ?? null);
 
   return (
     <Dialog isOpen={isOpen} onOpenChange={setIsOpen}>
-      <Dialog.Panel isDisabled={userId === machine.user?.id}>
-        <Dialog.Title>Change the owner of {machine.givenName}</Dialog.Title>
-        <Dialog.Text>The owner of the machine is the user associated with it.</Dialog.Text>
+      <DialogPanel isDisabled={userId === machine.user?.id}>
+        <Title>Change the owner of {machine.givenName}</Title>
+        <Text>The owner of the machine is the user associated with it.</Text>
         <input name="action_id" type="hidden" value="reassign" />
         <input name="node_id" type="hidden" value={machine.id} />
         <input name="user_id" type="hidden" value={userId?.toString()} />
         <Select
-          defaultSelectedKey={machine.user?.id}
-          isRequired
+          defaultValue={machine.user?.id}
+          required
           label="Owner"
           name="user"
-          onSelectionChange={(key) => {
+          onValueChange={(key) => {
             setUserId(key);
           }}
           placeholder="Select a user"
-        >
-          {users.map((user) => (
-            <Select.Item key={user.id}>
-              {user.name || user.displayName || user.email || user.id}
-            </Select.Item>
-          ))}
-        </Select>
-      </Dialog.Panel>
+          items={users.map((user) => ({
+            value: user.id,
+            label: getUserDisplayName(user),
+          }))}
+        />
+      </DialogPanel>
     </Dialog>
   );
 }

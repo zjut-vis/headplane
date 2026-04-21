@@ -3,18 +3,23 @@ package main
 import (
 	"bufio"
 	"context"
-	"fmt"
+	"encoding/json"
 	"os"
-	"strings"
+	"os/signal"
+	"syscall"
 
 	"github.com/tale/headplane/internal/config"
 	"github.com/tale/headplane/internal/tsnet"
 	"github.com/tale/headplane/internal/util"
 )
 
-type Register struct {
-	Type string
-	ID   string
+type output struct {
+	Self  string                     `json:"self"`
+	Hosts map[string]json.RawMessage `json:"hosts"`
+}
+
+type errorOutput struct {
+	Error string `json:"error"`
 }
 
 func main() {
@@ -28,34 +33,32 @@ func main() {
 	agent := tsnet.NewAgent(cfg)
 	defer agent.Shutdown()
 
+	agent.Connect()
+
+	enc := json.NewEncoder(os.Stdout)
 	scanner := bufio.NewScanner(os.Stdin)
+
+	// Shut down cleanly on signal or stdin close
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+
+	go func() {
+		<-sigCh
+		agent.Shutdown()
+		os.Exit(0)
+	}()
+
+	// Each line on stdin triggers a sync. The line content is ignored.
 	for scanner.Scan() {
-		line := scanner.Bytes()
-		directive := strings.TrimSpace(string(line))
-		log.Debug("Received directive: %s", directive)
-
-		switch directive {
-		case "START":
-			agent.Connect()
-			fmt.Printf("READY %s\n", agent.ID)
-
-		case "SHUTDOWN":
-			agent.Shutdown()
-			os.Exit(0)
-
-		case "PING":
-			fmt.Printf("PONG %s\n", agent.ID)
-
-		case "REFRESH":
-			err := agent.DispatchHostInfo(context.Background())
-			if err != nil {
-				fmt.Printf("ERROR %s\n", err)
-			}
+		hosts, err := agent.FetchAllHostInfo(context.Background())
+		if err != nil {
+			enc.Encode(errorOutput{Error: err.Error()})
+			continue
 		}
-	}
 
-	if err := scanner.Err(); err != nil {
-		fmt.Printf("ERROR %s\n", err)
-		os.Exit(1)
+		enc.Encode(output{
+			Self:  agent.ID,
+			Hosts: hosts,
+		})
 	}
 }

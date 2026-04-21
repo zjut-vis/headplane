@@ -5,7 +5,6 @@ import { reactRouter } from "@react-router/dev/vite";
 import tailwindcss from "@tailwindcss/vite";
 import { reactRouterHonoServer } from "react-router-hono-server/dev";
 import { defineConfig } from "vite";
-import tsconfigPaths from "vite-tsconfig-paths";
 import { parse } from "yaml";
 
 const prefix = process.env.__INTERNAL_PREFIX || "/admin";
@@ -42,33 +41,27 @@ const { server } = parse(config);
 
 export default defineConfig(({ command, isSsrBuild }) => ({
   base: command === "build" ? `${prefix}/` : undefined,
-  plugins: [reactRouterHonoServer(), reactRouter(), tailwindcss(), tsconfigPaths()],
+  plugins: [reactRouterHonoServer(), reactRouter(), tailwindcss()],
   server: {
     host: server.host,
     port: server.port,
   },
+  resolve: {
+    tsconfigPaths: true,
+  },
   build: {
-    target: "esnext",
+    target: "baseline-widely-available",
     sourcemap: true,
     rolldownOptions:
       command === "build"
         ? {
-            // Exclude libsql from the server side since it's a native module
             // Exclude WASM from the client since it fetches from the server
-            external: isSsrBuild ? [/^@libsql\//] : [/\.wasm(\?url)?$/],
-            output: {
-              manualChunks: undefined,
-              inlineDynamicImports: isSsrBuild,
-            },
+            external: isSsrBuild ? [] : [/\.wasm(\?url)?$/],
           }
         : undefined,
   },
   ssr: {
-    target: "node",
     noExternal: command === "build" ? true : undefined,
-  },
-  optimizeDeps: {
-    include: ["@libsql/client"],
   },
   define: {
     __VERSION__: JSON.stringify(isNext ? `${version}-next` : version),

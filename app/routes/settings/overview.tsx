@@ -1,15 +1,14 @@
 import { ArrowRight } from "lucide-react";
-import { Link as RemixLink } from "react-router";
 
-import Link from "~/components/Link";
+import Link from "~/components/link";
+import PageError from "~/components/page-error";
 
 import type { Route } from "./+types/overview";
 
 export async function loader({ context }: Route.LoaderArgs) {
-  const oidcConnector = await context.oidcConnector?.get();
   return {
     config: context.hs.writable(),
-    isOidcEnabled: oidcConnector?.isValid ?? false,
+    isOidcEnabled: context.oidc?.service.status().state === "ready",
   };
 }
 
@@ -29,20 +28,30 @@ export default function Page({ loaderData: { config, isOidcEnabled } }: Route.Co
         <p>
           Headscale fully supports pre-authentication keys in order to easily add devices to your
           Tailnet. To learn more about using pre-authentication keys, visit the{" "}
-          <Link
-            name="Tailscale Auth Keys documentation"
-            to="https://tailscale.com/kb/1085/auth-keys/"
-          >
+          <Link external styled to="https://tailscale.com/kb/1085/auth-keys/">
             Tailscale documentation
           </Link>
         </p>
       </div>
-      <RemixLink to="/settings/auth-keys">
+      <Link to="/settings/auth-keys">
         <div className="flex items-center text-lg font-medium">
           Manage Auth Keys
           <ArrowRight className="ml-2 h-5 w-5" />
         </div>
-      </RemixLink>
+      </Link>
+      <div className="flex w-full flex-col sm:w-2/3">
+        <h1 className="mb-4 text-2xl font-medium">Headplane Agent</h1>
+        <p>
+          The Headplane Agent syncs node information like OS version and connectivity details from
+          your Tailnet.
+        </p>
+      </div>
+      <Link to="/settings/agent">
+        <div className="flex items-center text-lg font-medium">
+          Agent Settings
+          <ArrowRight className="ml-2 h-5 w-5" />
+        </div>
+      </Link>
       {config && isOidcEnabled ? (
         <>
           <div className="flex w-full flex-col sm:w-2/3">
@@ -52,22 +61,23 @@ export default function Page({ loaderData: { config, isOidcEnabled } }: Route.Co
               domains, groups, or users to authenticate. This can be used to limit access to your
               Tailnet to only certain users or groups and Headplane will also respect these settings
               when authenticating.{" "}
-              <Link
-                name="Headscale OIDC documentation"
-                to="https://headscale.net/stable/ref/oidc/#basic-configuration"
-              >
+              <Link external styled to="https://headscale.net/stable/ref/oidc/#basic-configuration">
                 Learn More
               </Link>
             </p>
           </div>
-          <RemixLink to="/settings/restrictions">
+          <Link to="/settings/restrictions">
             <div className="flex items-center text-lg font-medium">
               Manage Restrictions
               <ArrowRight className="ml-2 h-5 w-5" />
             </div>
-          </RemixLink>
+          </Link>
         </>
       ) : undefined}
     </div>
   );
+}
+
+export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
+  return <PageError error={error} page="Settings" />;
 }

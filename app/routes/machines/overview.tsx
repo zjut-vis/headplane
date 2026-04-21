@@ -1,40 +1,42 @@
 import { ChevronDown, ChevronUp, Info, X } from "lucide-react";
 import { useMemo, useState } from "react";
+import { useSearchParams } from "react-router";
 
-import Code from "~/components/Code";
-import Input from "~/components/Input";
-import Link from "~/components/Link";
-import Tooltip from "~/components/Tooltip";
+import Code from "~/components/code";
+import Input from "~/components/input";
+import Link from "~/components/link";
+import PageError from "~/components/page-error";
+import Tooltip from "~/components/tooltip";
+import { nodesResource, usersResource } from "~/server/headscale/live-store";
 import { Capabilities } from "~/server/web/roles";
 import cn from "~/utils/cn";
-import { mapNodes, sortNodeTags } from "~/utils/node-info";
+import { mapNodes, sortNodeTags, type PopulatedNode } from "~/utils/node-info";
 
 import type { Route } from "./+types/overview";
-
+import { MachineFilters } from "./components/machine-filters";
 import MachineRow from "./components/machine-row";
 import NewMachine from "./dialogs/new";
+import { useMachineFilterParams } from "./hooks/use-machine-filter-params";
 import { machineAction } from "./machine-actions";
 
 export async function loader({ request, context }: Route.LoaderArgs) {
-  const session = await context.sessions.auth(request);
-  const user = session.user;
-  if (!user) {
-    throw new Error("Missing user session. Please log in again.");
-  }
+  const principal = await context.auth.require(request);
 
-  const check = await context.sessions.check(request, Capabilities.read_machines);
-
-  if (!check) {
-    // Not authorized to view this page
+  if (!context.auth.can(principal, Capabilities.read_machines)) {
     throw new Error(
       "You do not have permission to view this page. Please contact your administrator.",
     );
   }
 
-  const writablePermission = await context.sessions.check(request, Capabilities.write_machines);
+  const writablePermission = context.auth.can(principal, Capabilities.write_machines);
 
-  const api = context.hsApi.getRuntimeClient(session.api_key);
-  const [nodes, users] = await Promise.all([api.getNodes(), api.getUsers()]);
+  const api = context.hsApi.getRuntimeClient(context.auth.getHeadscaleApiKey(principal));
+  const [nodesSnap, usersSnap] = await Promise.all([
+    context.hsLive.get(nodesResource, api),
+    context.hsLive.get(usersResource, api),
+  ]);
+  const nodes = nodesSnap.data;
+  const users = usersSnap.data;
 
   let magic: string | undefined;
   if (context.hs.readable()) {
@@ -45,20 +47,27 @@ export async function loader({ request, context }: Route.LoaderArgs) {
 
   const stats = await context.agents?.lookup(nodes.map((node) => node.nodeKey));
   const populatedNodes = mapNodes(nodes, stats);
-  const supportsNodeOwnerChange = !context.hsApi.clientHelpers.isAtleast("0.28.0-beta.1");
+  const supportsNodeOwnerChange = !context.hsApi.clientHelpers.isAtleast("0.28.0");
+  const agentSync = context.agents?.lastSync();
 
   return {
-    populatedNodes,
-    nodes,
-    users,
+    agent: agentSync
+      ? {
+          syncedAt: agentSync.syncedAt?.toISOString() ?? null,
+          nodeCount: agentSync.nodeCount,
+          nodeKey: context.agents?.agentNodeKey(),
+        }
+      : undefined,
+    headscaleUserId: principal.kind === "oidc" ? principal.user.headscaleUserId : undefined,
     magic,
-    server: context.config.headscale.url,
+    nodes,
+    populatedNodes,
+    preAuth: context.auth.can(principal, Capabilities.generate_authkeys),
     publicServer: context.config.headscale.public_url,
-    agent: context.agents?.agentID(),
-    writable: writablePermission,
-    preAuth: await context.sessions.check(request, Capabilities.generate_authkeys),
-    subject: user.subject,
+    server: context.config.headscale.url,
     supportsNodeOwnerChange: supportsNodeOwnerChange,
+    users,
+    writable: writablePermission,
   };
 }
 
@@ -66,28 +75,69 @@ export const action = machineAction;
 
 type SortField = "name" | "ip" | "version" | "lastSeen";
 
+const STATUS_MATCH: Record<string, (n: PopulatedNode) => boolean> = {
+  online: (n) => n.online && !n.expired,
+  offline: (n) => !n.online && !n.expired,
+  expired: (n) => n.expired,
+};
+
+const ROUTE_MATCH: Record<string, (n: PopulatedNode) => boolean> = {
+  "exit-node": (n) => n.customRouting.exitRoutes.length > 0,
+  subnet: (n) =>
+    n.customRouting.subnetApprovedRoutes.length > 0 ||
+    n.customRouting.subnetWaitingRoutes.length > 0,
+};
+
 export default function Page({ loaderData }: Route.ComponentProps) {
-  const [searchQuery, setSearchQuery] = useState("");
+  const [searchParams, setSearchParams] = useSearchParams();
   const [sortField, setSortField] = useState<SortField>("name");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
+
+  const searchQuery = searchParams.get("q") ?? "";
+  const { filterUser, filterTag, filterStatus, filterRoute, hasActiveFilters } =
+    useMachineFilterParams();
+
+  const setSearchQuery = (value: string) => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      const v = value.slice(0, 100);
+      if (v) next.set("q", v);
+      else next.delete("q");
+      return next;
+    });
+  };
+
+  const clearSearch = () => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.delete("q");
+      return next;
+    });
+  };
 
   const filteredAndSortedNodes = useMemo(() => {
     const query = searchQuery.toLowerCase().trim();
 
-    let nodes = loaderData.populatedNodes.filter((node) => {
-      if (!query) return true;
-      if (node.givenName.toLowerCase().includes(query)) return true;
-      if (node.ipAddresses.some((ip) => ip.toLowerCase().includes(query))) return true;
-      return false;
-    });
+    let nodes = loaderData.populatedNodes.filter(
+      (node) =>
+        (!query ||
+          node.givenName.toLowerCase().includes(query) ||
+          node.ipAddresses.some((ip) => ip.toLowerCase().includes(query))) &&
+        (filterUser === null ||
+          (filterUser === "tag-owned" ? !node.user : node.user?.name === filterUser)) &&
+        (filterTag === null || (node.tags?.includes(filterTag) ?? false)) &&
+        (filterStatus === null || STATUS_MATCH[filterStatus](node)) &&
+        (filterRoute === null || ROUTE_MATCH[filterRoute](node)),
+    );
 
-    nodes = [...nodes].sort((a, b) => {
+    nodes = [...nodes].toSorted((a, b) => {
       let comparison = 0;
 
       switch (sortField) {
-        case "name":
+        case "name": {
           comparison = a.givenName.localeCompare(b.givenName);
           break;
+        }
         case "ip": {
           const getIPv4 = (addresses: string[]) =>
             addresses.find((ip) => !ip.includes(":")) || addresses[0] || "";
@@ -125,20 +175,30 @@ export default function Page({ loaderData }: Route.ComponentProps) {
           }
           break;
         }
-        case "lastSeen":
+        case "lastSeen": {
           if (a.online !== b.online) {
             comparison = a.online ? 1 : -1;
             break;
           }
           comparison = new Date(a.lastSeen).getTime() - new Date(b.lastSeen).getTime();
           break;
+        }
       }
 
       return sortDirection === "asc" ? comparison : -comparison;
     });
 
     return nodes;
-  }, [loaderData.populatedNodes, searchQuery, sortField, sortDirection]);
+  }, [
+    loaderData.populatedNodes,
+    searchQuery,
+    filterUser,
+    filterTag,
+    filterStatus,
+    filterRoute,
+    sortField,
+    sortDirection,
+  ]);
 
   const handleSort = (field: SortField) => {
     if (sortField === field) {
@@ -156,10 +216,7 @@ export default function Page({ loaderData }: Route.ComponentProps) {
           <h1 className="mb-2 text-2xl font-medium">Machines</h1>
           <p>
             Manage the devices connected to your Tailnet.{" "}
-            <Link
-              name="Tailscale Manage Devices Documentation"
-              to="https://tailscale.com/kb/1372/manage-devices"
-            >
+            <Link external styled to="https://tailscale.com/kb/1372/manage-devices">
               Learn more
             </Link>
           </p>
@@ -171,13 +228,13 @@ export default function Page({ loaderData }: Route.ComponentProps) {
           users={loaderData.users}
         />
       </div>
-      <div className="mb-4 flex items-center gap-4">
+      <div className="mb-4 flex flex-wrap items-center gap-3">
         <div className="relative w-64">
           <Input
             label="Search machines"
             labelHidden
             maxLength={100}
-            onChange={(value) => setSearchQuery(value.slice(0, 100))}
+            onChange={setSearchQuery}
             placeholder="Search by name or IP address..."
             value={searchQuery}
           />
@@ -187,26 +244,27 @@ export default function Page({ loaderData }: Route.ComponentProps) {
               className={cn(
                 "absolute right-2 top-1/2 -translate-y-1/2",
                 "p-1 rounded-full",
-                "text-headplane-400 hover:text-headplane-600",
-                "dark:text-headplane-500 dark:hover:text-headplane-300",
-                "hover:bg-headplane-100 dark:hover:bg-headplane-800",
+                "text-mist-400 hover:text-mist-600",
+                "dark:text-mist-500 dark:hover:text-mist-300",
+                "hover:bg-mist-100 dark:hover:bg-mist-800",
               )}
-              onClick={() => setSearchQuery("")}
+              onClick={clearSearch}
               type="button"
             >
               <X className="h-4 w-4" />
             </button>
           )}
         </div>
-        <span className="text-headplane-500 text-sm whitespace-nowrap">
-          {searchQuery
+        <MachineFilters users={loaderData.users} populatedNodes={loaderData.populatedNodes} />
+        <span className="ml-auto text-sm whitespace-nowrap text-mist-500">
+          {searchQuery || hasActiveFilters
             ? `Showing ${filteredAndSortedNodes.length} of ${loaderData.populatedNodes.length} machines`
             : `${loaderData.populatedNodes.length} machines`}
         </span>
       </div>
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[640px] table-auto rounded-lg">
-          <thead className="text-headplane-600 dark:text-headplane-300">
+        <table className="w-full min-w-160 table-auto rounded-lg">
+          <thead className="text-mist-600 dark:text-mist-300">
             <tr className="px-0.5 text-left">
               <th
                 aria-sort={
@@ -222,7 +280,7 @@ export default function Page({ loaderData }: Route.ComponentProps) {
                   aria-label="Sort by name"
                   className={cn(
                     "flex items-center gap-x-1 cursor-pointer",
-                    "hover:text-headplane-900 dark:hover:text-headplane-100",
+                    "hover:text-mist-900 dark:hover:text-mist-100",
                   )}
                   onClick={() => handleSort("name")}
                   type="button"
@@ -251,7 +309,7 @@ export default function Page({ loaderData }: Route.ComponentProps) {
                     aria-label="Sort by IP address"
                     className={cn(
                       "flex items-center gap-x-1 cursor-pointer uppercase text-xs font-bold",
-                      "hover:text-headplane-900 dark:hover:text-headplane-100",
+                      "hover:text-mist-900 dark:hover:text-mist-100",
                     )}
                     onClick={() => handleSort("ip")}
                     type="button"
@@ -265,16 +323,19 @@ export default function Page({ loaderData }: Route.ComponentProps) {
                       ))}
                   </button>
                   {loaderData.magic ? (
-                    <Tooltip>
+                    <Tooltip
+                      content={
+                        <span className="font-normal">
+                          Since MagicDNS is enabled, you can access devices based on their name and
+                          also at{" "}
+                          <Code>
+                            [name].
+                            {loaderData.magic}
+                          </Code>
+                        </span>
+                      }
+                    >
                       <Info className="h-4 w-4" />
-                      <Tooltip.Body className="font-normal">
-                        Since MagicDNS is enabled, you can access devices based on their name and
-                        also at{" "}
-                        <Code>
-                          [name].
-                          {loaderData.magic}
-                        </Code>
-                      </Tooltip.Body>
                     </Tooltip>
                   ) : undefined}
                 </div>
@@ -295,7 +356,7 @@ export default function Page({ loaderData }: Route.ComponentProps) {
                     aria-label="Sort by version"
                     className={cn(
                       "flex items-center gap-x-1 cursor-pointer",
-                      "hover:text-headplane-900 dark:hover:text-headplane-100",
+                      "hover:text-mist-900 dark:hover:text-mist-100",
                     )}
                     onClick={() => handleSort("version")}
                     type="button"
@@ -324,7 +385,7 @@ export default function Page({ loaderData }: Route.ComponentProps) {
                   aria-label="Sort by last seen"
                   className={cn(
                     "flex items-center gap-x-1 cursor-pointer",
-                    "hover:text-headplane-900 dark:hover:text-headplane-100",
+                    "hover:text-mist-900 dark:hover:text-mist-100",
                   )}
                   onClick={() => handleSort("lastSeen")}
                   type="button"
@@ -338,32 +399,39 @@ export default function Page({ loaderData }: Route.ComponentProps) {
                     ))}
                 </button>
               </th>
+              <th className="w-12 pb-2">
+                <span className="sr-only">Actions</span>
+              </th>
             </tr>
           </thead>
           <tbody
             className={cn(
-              "divide-y divide-headplane-100 dark:divide-headplane-800 align-top",
-              "border-t border-headplane-100 dark:border-headplane-800",
+              "divide-y divide-mist-100 dark:divide-mist-800 align-top",
+              "border-t border-mist-100 dark:border-mist-800",
             )}
           >
             {filteredAndSortedNodes.length === 0 ? (
               <tr>
                 <td
-                  className="text-headplane-500 py-8 text-center"
-                  colSpan={loaderData.agent !== undefined ? 5 : 4}
+                  className="py-8 text-center text-mist-500"
+                  colSpan={loaderData.agent !== undefined ? 6 : 5}
                 >
-                  No machines found matching "{searchQuery}"
+                  No machines match the current filters
                 </td>
               </tr>
             ) : (
               filteredAndSortedNodes.map((node) => (
                 <MachineRow
                   existingTags={sortNodeTags(loaderData.nodes)}
-                  isAgent={loaderData.agent ? loaderData.agent === node.nodeKey : undefined}
+                  isAgent={
+                    loaderData.agent !== undefined
+                      ? node.nodeKey === loaderData.agent.nodeKey
+                      : undefined
+                  }
                   isDisabled={
                     loaderData.writable
                       ? false // If the user has write permissions, they can edit all machines
-                      : node.user?.providerId?.split("/").pop() !== loaderData.subject
+                      : node.user?.id !== loaderData.headscaleUserId
                   }
                   key={node.id}
                   magic={loaderData.magic}
@@ -378,4 +446,8 @@ export default function Page({ loaderData }: Route.ComponentProps) {
       </div>
     </>
   );
+}
+
+export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
+  return <PageError error={error} page="Machines" />;
 }

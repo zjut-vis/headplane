@@ -15,8 +15,8 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  actions: write # Allow canceling in-progress runs
-  contents: read # Read access to the repository
+  actions: write
+  contents: read
 
 jobs:
   ci:
@@ -24,7 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out the repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -41,8 +41,9 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+          cache: true
 
-      - name: CI pipeline
+      - name: Build
         run: ./build.sh --skip-pnpm-prune
 
       - name: Run unit tests
@@ -52,19 +53,22 @@ jobs:
         run: pnpm run test:integration
 
   nix:
-    name: nix
+    name: Nix Flake Check
     runs-on: ubuntu-latest
     steps:
       - name: Check out the repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@main
         with:
           determinate: true
 
+      - name: Cache Nix store
+        uses: DeterminateSystems/magic-nix-cache-action@main
+
       - name: Check flake inputs
         uses: DeterminateSystems/flake-checker-action@main
 
       - name: Check flake outputs
-        run: nix flake check --all-systems
+        run: nix flake check

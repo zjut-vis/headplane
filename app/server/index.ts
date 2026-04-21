@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { exit, versions } from "node:process";
+
 import { createHonoServer } from "react-router-hono-server/node";
 
 import log from "~/utils/log";
@@ -9,8 +10,9 @@ import { loadConfig } from "./config/load";
 import { createDbClient } from "./db/client.server";
 import { createHeadscaleInterface } from "./headscale/api";
 import { loadHeadscaleConfig } from "./headscale/config-loader";
-import { createHeadplaneAgent } from "./hp-agent";
-import { createSessionStorage } from "./web/sessions";
+import { createLiveStore, nodesResource, usersResource } from "./headscale/live-store";
+import { createAgentManager } from "./hp-agent";
+import { createAuthService } from "./web/auth";
 
 declare global {
   const __PREFIX__: string;
@@ -34,9 +36,26 @@ try {
 }
 
 const db = await createDbClient(join(config.server.data_path, "hp_persist.db"));
-const agents = await createHeadplaneAgent(config.integration?.agent, config.headscale.url, db);
-
 const hsApi = await createHeadscaleInterface(config.headscale.url, config.headscale.tls_cert_path);
+
+// Resolve the Headscale API key: headscale.api_key takes precedence,
+// falling back to the deprecated oidc.headscale_api_key for compatibility.
+const headscaleApiKey = config.headscale.api_key ?? config.oidc?.headscale_api_key;
+
+const agents = headscaleApiKey
+  ? await createAgentManager(
+      config.integration?.agent,
+      config.headscale.url,
+      hsApi.getRuntimeClient(headscaleApiKey),
+      hsApi.clientHelpers.isAtleast("0.28.0"),
+      db,
+    )
+  : (() => {
+      if (config.integration?.agent?.enabled) {
+        log.warn("agent", "Agent is enabled but no headscale.api_key is configured");
+      }
+      return undefined;
+    })();
 
 // We also use this file to load anything needed by the react router code.
 // These are usually per-request things that we need access to, like the
@@ -46,25 +65,27 @@ export type LoadContext = typeof appLoadContext;
 import "react-router";
 import { HeadplaneConfig } from "./config/config-schema";
 import { ConfigError } from "./config/error";
-import { createLazyOidcConnector } from "./web/oidc-connector";
+import { createOidcService } from "./oidc/provider";
 
 declare module "react-router" {
   interface AppLoadContext extends LoadContext {}
 }
 
+const hsLive = createLiveStore([nodesResource, usersResource]);
+
 const appLoadContext = {
   config,
+  hsLive,
   hs: await loadHeadscaleConfig(
     config.headscale.config_path,
     config.headscale.config_strict,
     config.headscale.dns_records_path,
   ),
 
-  // TODO: Better cookie options in config
-  sessions: await createSessionStorage({
+  auth: createAuthService({
     secret: config.server.cookie_secret,
+    headscaleApiKey,
     db,
-    oidcUsersFile: config.oidc?.user_storage_file,
     cookie: {
       name: "_hp_auth",
       secure: config.server.cookie_secure,
@@ -73,16 +94,32 @@ const appLoadContext = {
     },
   }),
 
+  headscaleApiKey,
   hsApi,
   agents,
   integration: await loadIntegration(config.integration),
-  oidcConnector:
-    config.oidc && config.oidc.enabled !== false
-      ? createLazyOidcConnector(
-          config.server.base_url,
-          config.oidc,
-          hsApi.getRuntimeClient(config.oidc.headscale_api_key),
-        )
+  oidc:
+    config.oidc && config.oidc.enabled !== false && headscaleApiKey
+      ? {
+          service: createOidcService({
+            issuer: config.oidc.issuer,
+            clientId: config.oidc.client_id,
+            clientSecret: config.oidc.client_secret,
+            baseUrl: config.server.base_url ?? "",
+            authorizationEndpoint: config.oidc.authorization_endpoint,
+            tokenEndpoint: config.oidc.token_endpoint,
+            userinfoEndpoint: config.oidc.userinfo_endpoint,
+            tokenEndpointAuthMethod:
+              config.oidc.token_endpoint_auth_method === "client_secret_jwt"
+                ? undefined
+                : config.oidc.token_endpoint_auth_method,
+            usePkce: config.oidc.use_pkce,
+            scope: config.oidc.scope,
+            extraParams: config.oidc.extra_params,
+            profilePictureSource: config.oidc.profile_picture_source,
+          }),
+          disableApiKeyLogin: config.oidc.disable_api_key_login,
+        }
       : undefined,
   db,
 };
@@ -126,6 +163,8 @@ export default createHonoServer({
     log.info("server", "Running on %s:%s", info.address, info.port);
   },
 });
+
+appLoadContext.auth.start();
 
 process.on("SIGINT", () => {
   log.info("server", "Received SIGINT, shutting down...");

@@ -1,27 +1,28 @@
 import { CheckCircle, CircleSlash, Info, UserCircle } from "lucide-react";
 import { useMemo, useState } from "react";
-import { data, Link as RemixLink } from "react-router";
+import { data } from "react-router";
 
-import Attribute from "~/components/Attribute";
-import Button from "~/components/Button";
-import Card from "~/components/Card";
-import Chip from "~/components/Chip";
-import Link from "~/components/Link";
-import StatusCircle from "~/components/StatusCircle";
-import Tooltip from "~/components/Tooltip";
+import Attribute from "~/components/attribute";
+import Button from "~/components/button";
+import Card from "~/components/card";
+import Chip from "~/components/chip";
+import Link from "~/components/link";
+import StatusCircle from "~/components/status-circle";
+import Tooltip from "~/components/tooltip";
+import { nodesResource, usersResource } from "~/server/headscale/live-store";
 import cn from "~/utils/cn";
 import { getOSInfo, getTSVersion } from "~/utils/host-info";
 import { mapNodes, sortNodeTags } from "~/utils/node-info";
+import { getUserDisplayName } from "~/utils/user";
 
 import type { Route } from "./+types/machine";
-
 import { mapTagsToComponents, uiTagsForNode } from "./components/machine-row";
 import MenuOptions from "./components/menu";
 import Routes from "./dialogs/routes";
 import { machineAction } from "./machine-actions";
 
 export async function loader({ request, params, context }: Route.LoaderArgs) {
-  const session = await context.sessions.auth(request);
+  const principal = await context.auth.require(request);
   if (!params.id) {
     throw new Error("No machine ID provided");
   }
@@ -37,24 +38,39 @@ export async function loader({ request, params, context }: Route.LoaderArgs) {
     }
   }
 
-  const api = context.hsApi.getRuntimeClient(session.api_key);
-  const [nodes, users] = await Promise.all([api.getNodes(), api.getUsers()]);
+  const api = context.hsApi.getRuntimeClient(context.auth.getHeadscaleApiKey(principal));
+  const [nodesSnap, usersSnap] = await Promise.all([
+    context.hsLive.get(nodesResource, api),
+    context.hsLive.get(usersResource, api),
+  ]);
+  const nodes = nodesSnap.data;
+  const users = usersSnap.data;
   const node = nodes.find((node) => node.id === params.id);
+  if (node == null) {
+    throw data(null, { status: 404 });
+  }
 
   const lookup = await context.agents?.lookup([node.nodeKey]);
   const [enhancedNode] = mapNodes([node], lookup);
-  const tags = [...node.tags].sort();
-  const supportsNodeOwnerChange = !context.hsApi.clientHelpers.isAtleast("0.28.0-beta.1");
+  const tags = [...node.tags].toSorted();
+  const supportsNodeOwnerChange = !context.hsApi.clientHelpers.isAtleast("0.28.0");
+  const agentSync = context.agents?.lastSync();
 
   return {
+    agent: agentSync
+      ? {
+          syncedAt: agentSync.syncedAt?.toISOString() ?? null,
+          nodeCount: agentSync.nodeCount,
+          nodeKey: context.agents?.agentNodeKey(),
+        }
+      : undefined,
+    existingTags: sortNodeTags(nodes),
+    magic,
     node: enhancedNode,
+    stats: lookup?.[enhancedNode.nodeKey],
+    supportsNodeOwnerChange: supportsNodeOwnerChange,
     tags,
     users,
-    magic,
-    agent: context.agents?.agentID(),
-    stats: lookup?.[enhancedNode.nodeKey],
-    existingTags: sortNodeTags(nodes),
-    supportsNodeOwnerChange: supportsNodeOwnerChange,
   };
 }
 
@@ -66,23 +82,23 @@ export default function Page({
   const [showRouting, setShowRouting] = useState(false);
 
   const uiTags = useMemo(() => {
-    const tags = uiTagsForNode(node, agent === node.nodeKey);
+    const tags = uiTagsForNode(node, agent?.nodeKey === node.nodeKey);
     return tags;
   }, [node, agent]);
 
   return (
     <div>
       <p className="text-md mb-8">
-        <RemixLink className="font-medium" to="/machines">
+        <Link className="font-medium" to="/machines">
           All Machines
-        </RemixLink>
+        </Link>
         <span className="mx-2">/</span>
         {node.givenName}
       </p>
       <div
         className={cn(
           "flex justify-between items-center pb-2",
-          "border-b border-headplane-100 dark:border-headplane-800",
+          "border-b border-mist-100 dark:border-mist-800",
         )}
       >
         <span className="flex items-baseline gap-x-4 text-sm">
@@ -99,23 +115,20 @@ export default function Page({
         />
       </div>
       <div className="mb-4 flex gap-1">
-        <div className="border-headplane-100 dark:border-headplane-800 border-r p-2 pr-4">
-          <span className="text-headplane-600 dark:text-headplane-300 flex items-center gap-x-1 text-sm">
+        <div className="border-r border-mist-100 p-2 pr-4 dark:border-mist-800">
+          <span className="flex items-center gap-x-1 text-sm text-mist-600 dark:text-mist-300">
             Managed by
-            <Tooltip>
+            <Tooltip content="By default, a machine’s permissions match its creator’s.">
               <Info className="p-1" />
-              <Tooltip.Body>By default, a machine’s permissions match its creator’s.</Tooltip.Body>
             </Tooltip>
           </span>
           <div className="mt-1 flex items-center gap-x-2.5">
             <UserCircle />
-            {node.user
-              ? node.user.name || node.user.displayName || node.user.email || node.user.id
-              : "Tag-owned"}
+            {node.user ? getUserDisplayName(node.user) : "Tag-owned"}
           </div>
         </div>
         <div className="p-2 pl-4">
-          <p className="text-headplane-600 dark:text-headplane-300 text-sm">Status</p>
+          <p className="text-sm text-mist-600 dark:text-mist-300">Status</p>
           <div className="mt-1 mb-8 flex gap-1">
             {mapTagsToComponents(node, uiTags)}
             {tags.map((tag) => (
@@ -129,11 +142,11 @@ export default function Page({
       <div className="mb-4 flex items-center justify-between">
         <p>
           Subnets let you expose physical network routes onto Tailscale.{" "}
-          <Link name="Tailscale Subnets Documentation" to="https://tailscale.com/kb/1019/subnets">
+          <Link external styled to="https://tailscale.com/kb/1019/subnets">
             Learn More
           </Link>
         </p>
-        <Button onPress={() => setShowRouting(true)}>Review</Button>
+        <Button onClick={() => setShowRouting(true)}>Review</Button>
       </div>
       <Card
         className={cn(
@@ -143,13 +156,10 @@ export default function Page({
         variant="flat"
       >
         <div>
-          <span className="text-headplane-600 dark:text-headplane-300 flex items-center gap-x-1">
+          <span className="flex items-center gap-x-1 text-mist-600 dark:text-mist-300">
             Approved
-            <Tooltip>
+            <Tooltip content="Traffic to these routes are being routed through this machine.">
               <Info className="h-3.5 w-3.5" />
-              <Tooltip.Body>
-                Traffic to these routes are being routed through this machine.
-              </Tooltip.Body>
             </Tooltip>
           </span>
           <div className="mt-1">
@@ -164,21 +174,18 @@ export default function Page({
             )}
           </div>
           <Button
-            className={cn("px-1.5 py-0.5 rounded-md mt-1.5", "text-blue-500 dark:text-blue-400")}
-            onPress={() => setShowRouting(true)}
+            className="mt-1.5 px-1.5 py-0.5"
+            onClick={() => setShowRouting(true)}
+            variant="ghost"
           >
             Edit
           </Button>
         </div>
         <div>
-          <span className="text-headplane-600 dark:text-headplane-300 flex items-center gap-x-1">
+          <span className="flex items-center gap-x-1 text-mist-600 dark:text-mist-300">
             Awaiting Approval
-            <Tooltip>
+            <Tooltip content="This machine is advertising these routes, but they must be approved before traffic will be routed to them.">
               <Info className="h-3.5 w-3.5" />
-              <Tooltip.Body>
-                This machine is advertising these routes, but they must be approved before traffic
-                will be routed to them.
-              </Tooltip.Body>
             </Tooltip>
           </span>
           <div className="mt-1">
@@ -193,20 +200,18 @@ export default function Page({
             )}
           </div>
           <Button
-            className={cn("px-1.5 py-0.5 rounded-md mt-1.5", "text-blue-500 dark:text-blue-400")}
-            onPress={() => setShowRouting(true)}
+            className="mt-1.5 px-1.5 py-0.5"
+            onClick={() => setShowRouting(true)}
+            variant="ghost"
           >
             Edit
           </Button>
         </div>
         <div>
-          <span className="text-headplane-600 dark:text-headplane-300 flex items-center gap-x-1">
+          <span className="flex items-center gap-x-1 text-mist-600 dark:text-mist-300">
             Exit Node
-            <Tooltip>
+            <Tooltip content="Whether this machine can act as an exit node for your tailnet.">
               <Info className="h-3.5 w-3.5" />
-              <Tooltip.Body>
-                Whether this machine can act as an exit node for your tailnet.
-              </Tooltip.Body>
             </Tooltip>
           </span>
           <div className="mt-1">
@@ -225,8 +230,9 @@ export default function Page({
             )}
           </div>
           <Button
-            className={cn("px-1.5 py-0.5 rounded-md mt-1.5", "text-blue-500 dark:text-blue-400")}
-            onPress={() => setShowRouting(true)}
+            className="mt-1.5 px-1.5 py-0.5"
+            onClick={() => setShowRouting(true)}
+            variant="ghost"
           >
             Edit
           </Button>
@@ -243,11 +249,7 @@ export default function Page({
         <div className="flex flex-col gap-1">
           <Attribute
             name="Creator"
-            value={
-              node.user
-                ? node.user.name || node.user.displayName || node.user.email || node.user.id
-                : "Tag-owned"
-            }
+            value={node.user ? getUserDisplayName(node.user) : "Tag-owned"}
           />
           <Attribute name="Machine name" value={node.givenName} />
           <Attribute

@@ -1,105 +1,102 @@
-import Dialog from '~/components/Dialog';
-import Link from '~/components/Link';
-import Notice from '~/components/Notice';
-import RadioGroup from '~/components/RadioGroup';
-import { Roles } from '~/server/web/roles';
-import { User } from '~/types';
+import Dialog, { DialogPanel } from "~/components/dialog";
+import Link from "~/components/link";
+import Notice from "~/components/notice";
+import RadioGroup from "~/components/radio-group";
+import Text from "~/components/text";
+import Title from "~/components/title";
+import { Roles } from "~/server/web/roles";
+import type { Role } from "~/server/web/roles";
 
 interface ReassignProps {
-	user: User & { headplaneRole: string };
-	isOpen: boolean;
-	setIsOpen: (isOpen: boolean) => void;
+  userId: string;
+  displayName: string;
+  role: Role;
+  isOpen: boolean;
+  setIsOpen: (isOpen: boolean) => void;
 }
 
 export default function ReassignUser({
-	user,
-	isOpen,
-	setIsOpen,
+  userId,
+  displayName,
+  role,
+  isOpen,
+  setIsOpen,
 }: ReassignProps) {
-	return (
-		<Dialog isOpen={isOpen} onOpenChange={setIsOpen}>
-			<Dialog.Panel
-				variant={user.headplaneRole === 'owner' ? 'unactionable' : 'normal'}
-			>
-				<Dialog.Title>
-					Change role for {user.name || user.displayName}?
-				</Dialog.Title>
-				<Dialog.Text className="mb-6">
-					Most roles are carried straight from Tailscale. However, keep in mind
-					that I have not fully implemented permissions yet and some things may
-					be accessible to everyone. The only fully completed role is Member.{' '}
-					<Link
-						name="Tailscale User Roles documentation"
-						to="https://tailscale.com/kb/1138/user-roles"
-					>
-						Learn More
-					</Link>
-				</Dialog.Text>
-				{user.headplaneRole === 'owner' ? (
-					<Notice>The Tailnet owner cannot be reassigned.</Notice>
-				) : (
-					<>
-						<input name="action_id" type="hidden" value="reassign_user" />
-						<input name="user_id" type="hidden" value={user.id} />
-						<RadioGroup
-							className="gap-4"
-							defaultValue={user.headplaneRole}
-							isRequired
-							label="Role"
-							name="new_role"
-						>
-							{Object.keys(Roles)
-								.filter((role) => role !== 'owner')
-								.map((role) => {
-									const { name, desc } = mapRoleToName(role);
-									return (
-										<RadioGroup.Radio key={role} label={name} value={role}>
-											<div className="block">
-												<p className="font-bold">{name}</p>
-												<p className="opacity-70">{desc}</p>
-											</div>
-										</RadioGroup.Radio>
-									);
-								})}
-						</RadioGroup>
-					</>
-				)}
-			</Dialog.Panel>
-		</Dialog>
-	);
+  return (
+    <Dialog isOpen={isOpen} onOpenChange={setIsOpen}>
+      <DialogPanel variant={role === "owner" ? "unactionable" : "normal"}>
+        <Title>Change role for {displayName}?</Title>
+        <Text className="mb-6">
+          Roles control what the user can access in Headplane. Each role grants a specific set of
+          capabilities.{" "}
+          <Link external styled to="https://tailscale.com/kb/1138/user-roles">
+            Learn More
+          </Link>
+        </Text>
+        {role === "owner" ? (
+          <Notice>The Tailnet owner cannot be reassigned.</Notice>
+        ) : (
+          <>
+            <input name="action_id" type="hidden" value="reassign_user" />
+            <input name="user_id" type="hidden" value={userId} />
+            <RadioGroup className="gap-4" defaultValue={role} label="Role" name="new_role">
+              {Object.keys(Roles)
+                .filter((r) => r !== "owner")
+                .map((r) => {
+                  const { name, desc } = mapRoleToName(r);
+                  return (
+                    <RadioGroup.Radio key={r} label={name} value={r}>
+                      <div className="block">
+                        <p className="font-bold">{name}</p>
+                        <p className="opacity-70">{desc}</p>
+                      </div>
+                    </RadioGroup.Radio>
+                  );
+                })}
+            </RadioGroup>
+          </>
+        )}
+      </DialogPanel>
+    </Dialog>
+  );
 }
 
 function mapRoleToName(role: string) {
-	switch (role) {
-		case 'admin':
-			return {
-				name: 'Admin',
-				desc: 'Can view the admin console, manage network, machine, and user settings.',
-			};
-		case 'network_admin':
-			return {
-				name: 'Network Admin',
-				desc: 'Can view the admin console and manage ACLs and network settings. Cannot manage machines or users.',
-			};
-		case 'it_admin':
-			return {
-				name: 'IT Admin',
-				desc: 'Can view the admin console and manage machines and users. Cannot manage ACLs or network settings.',
-			};
-		case 'auditor':
-			return {
-				name: 'Auditor',
-				desc: 'Can view the admin console.',
-			};
-		case 'member':
-			return {
-				name: 'Member',
-				desc: 'Cannot view the admin console.',
-			};
-		default:
-			return {
-				name: 'Unknown',
-				desc: 'Unknown',
-			};
-	}
+  switch (role) {
+    case "admin":
+      return {
+        name: "Admin",
+        desc: "Can view the admin console, manage network, machine, and user settings.",
+      };
+    case "network_admin":
+      return {
+        name: "Network Admin",
+        desc: "Can view the admin console and manage ACLs and network settings. Cannot manage machines or users.",
+      };
+    case "it_admin":
+      return {
+        name: "IT Admin",
+        desc: "Can view the admin console and manage machines and users. Cannot manage ACLs or network settings.",
+      };
+    case "auditor":
+      return {
+        name: "Auditor",
+        desc: "Can view the admin console.",
+      };
+    case "viewer":
+      return {
+        name: "Viewer",
+        desc: "Can view machines, users, and generate their own auth keys.",
+      };
+    case "member":
+      return {
+        name: "Member",
+        desc: "Cannot view the admin console.",
+      };
+    default:
+      return {
+        name: role,
+        desc: "No description available.",
+      };
+  }
 }

@@ -1,7 +1,9 @@
 FROM --platform=$BUILDPLATFORM golang:1.25.1 AS go-base
 WORKDIR /run
+RUN apt-get update && apt-get install -y --no-install-recommends patch && rm -rf /var/lib/apt/lists/*
 
 COPY go.mod go.sum build.sh ./
+COPY patches/ ./patches/
 RUN go mod download
 
 COPY cmd/ ./cmd/
@@ -25,25 +27,24 @@ RUN chmod +x /bin/hp_healthcheck
 # Folder needs to exist for later stages
 RUN mkdir -p /var/lib/headplane/agent
 
-FROM --platform=$BUILDPLATFORM node:22.16-slim AS js-base
+FROM --platform=$BUILDPLATFORM node:24-slim AS js-base
 WORKDIR /run
 
 RUN corepack enable
 COPY patches ./patches
 COPY package.json pnpm-lock.yaml build.sh ./
 
-COPY --from=go-base /bin/hp_ssh.wasm /run/app/hp_ssh.wasm
-COPY --from=go-base /bin/wasm_exec.js /run/app/wasm_exec.js
+COPY --from=go-base /bin/hp_ssh.wasm /run/public/hp_ssh.wasm
+COPY --from=go-base /bin/wasm_exec.js /run/public/wasm_exec.js
 RUN ./build.sh --app --app-install-only
 
 COPY . .
 ARG HEADPLANE_VERSION
 RUN HEADPLANE_VERSION=$HEADPLANE_VERSION ./build.sh --app
 
-FROM gcr.io/distroless/nodejs22-debian12:latest AS final
+FROM gcr.io/distroless/nodejs24-debian13:latest AS final
 COPY --from=js-base /run/build /app/build
 COPY --from=js-base /run/drizzle /app/drizzle
-COPY --from=js-base /run/node_modules /app/node_modules
 
 COPY --from=go-base /bin/hp_agent /usr/libexec/headplane/agent
 COPY --from=go-base /var/lib/headplane /var/lib/headplane
@@ -59,12 +60,11 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
 WORKDIR /app
 CMD [ "/app/build/server/index.js" ]
 
-FROM node:22-alpine AS debug-shell
+FROM node:24-alpine AS debug-shell
 RUN apk add --no-cache bash curl
 
 COPY --from=js-base /run/build /app/build
 COPY --from=js-base /run/drizzle /app/drizzle
-COPY --from=js-base /run/node_modules /app/node_modules
 
 COPY --from=go-base /bin/hp_agent /usr/libexec/headplane/agent
 COPY --from=go-base /var/lib/headplane /var/lib/headplane

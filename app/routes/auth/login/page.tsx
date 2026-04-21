@@ -1,16 +1,15 @@
 import { AlertCircle } from "lucide-react";
 import { useEffect, useState } from "react";
-import { Form, Link as RemixLink, redirect, useSearchParams } from "react-router";
+import { Form, Link as RouterLink, redirect, useSearchParams } from "react-router";
 
-import Button from "~/components/Button";
-import Card from "~/components/Card";
-import Code from "~/components/Code";
-import Input from "~/components/Input";
-import Link from "~/components/Link";
+import Button from "~/components/button";
+import Card from "~/components/card";
+import Code from "~/components/code";
+import Input from "~/components/input";
+import Link from "~/components/link";
 import { useLiveData } from "~/utils/live-data";
 
 import type { Route } from "./+types/page";
-
 import { loginAction } from "./action";
 import { OidcConfigErrorNotice, OidcDiscoveryFailedNotice } from "./config-error";
 import Logout from "./logout";
@@ -18,23 +17,27 @@ import { OidcErrorNotice } from "./oidc-error";
 
 export async function loader({ request, context }: Route.LoaderArgs) {
   try {
-    await context.sessions.auth(request);
+    await context.auth.require(request);
     return redirect("/machines");
   } catch {}
 
   const qp = new URL(request.url).searchParams;
   const urlState = qp.get("s") ?? undefined;
 
-  const oidcConnector = await context.oidcConnector?.get();
+  const oidcService = context.oidc?.service;
+  const oidcStatus = oidcService
+    ? await oidcService.discover().then(
+        (r) => (r.ok ? oidcService.status() : oidcService.status()),
+        () => oidcService.status(),
+      )
+    : undefined;
 
-  // MARK: This works because the OIDC connector will always return false
-  // for `isExclusive` if the OIDC config isn't usable.
-  if (oidcConnector?.isExclusive && urlState !== "logout") {
+  if (context.oidc?.disableApiKeyLogin && oidcStatus?.state === "ready" && urlState !== "logout") {
     return redirect("/oidc/start");
   }
 
-  const isOidcConnectorEnabled = oidcConnector?.isValid;
-  const oidcErrorCodes = !isOidcConnectorEnabled ? (oidcConnector?.errors ?? []) : [];
+  const isOidcConnectorEnabled = oidcStatus?.state === "ready";
+  const oidcErrorCodes = oidcStatus?.state === "error" ? [oidcStatus.error.code] : [];
 
   return {
     isCookieSecureEnabled: context.config.server.cookie_secure,
@@ -64,14 +67,14 @@ export default function Page({ loaderData, actionData }: Route.ComponentProps) {
 
   useEffect(() => {
     // State is a one time thing, we need to remove it after it has
-    // been consumed to prevent logic loops.
+    // Been consumed to prevent logic loops.
     if (urlState !== null) {
       const searchParams = new URLSearchParams(params);
       searchParams.delete("s");
 
       // Replacing because it's not a navigation, just a cleanup of the URL
       // We can't use the useSearchParams method since it revalidates
-      // which will trigger a full reload
+      // Which will trigger a full reload
       const newUrl = searchParams.toString()
         ? `{${window.location.pathname}?${searchParams.toString()}`
         : window.location.pathname;
@@ -89,7 +92,7 @@ export default function Page({ loaderData, actionData }: Route.ComponentProps) {
       <div>
         {urlState?.startsWith("error_") ? (
           <OidcErrorNotice code={urlState} />
-        ) : oidcErrorCodes.includes("DISCOVERY_FAILED") ? (
+        ) : oidcErrorCodes.includes("discovery_failed") ? (
           <OidcDiscoveryFailedNotice />
         ) : oidcErrorCodes.length > 0 ? (
           <OidcConfigErrorNotice errors={oidcErrorCodes} />
@@ -104,7 +107,8 @@ export default function Page({ loaderData, actionData }: Route.ComponentProps) {
                 Headplane is configured to use secure cookies, but this site is being served over an
                 insecure connection and login will not work correctly.{" "}
                 <Link
-                  name="Headplane Common Issues"
+                  external
+                  styled
                   to="https://headplane.net/configuration/common-issues#issue-logging-in-does-not-do-anything"
                 >
                   Learn more.
@@ -122,7 +126,7 @@ export default function Page({ loaderData, actionData }: Route.ComponentProps) {
             </Card.Text>
             <Input
               className="mt-8 mb-2"
-              isRequired
+              required
               label="API Key"
               labelHidden
               name="api_key"
@@ -139,15 +143,11 @@ export default function Page({ loaderData, actionData }: Route.ComponentProps) {
             </Button>
           </Form>
           {isOidcConnectorEnabled ? (
-            <RemixLink to="/oidc/start">
-              <Button
-                className="mt-2 w-full"
-                isDisabled={oidcErrorCodes.length > 0}
-                variant="light"
-              >
+            <RouterLink to="/oidc/start" prefetch="none" reloadDocument>
+              <Button className="mt-2 w-full" disabled={oidcErrorCodes.length > 0} variant="light">
                 Single Sign-On
               </Button>
-            </RemixLink>
+            </RouterLink>
           ) : undefined}
         </Card>
       </div>

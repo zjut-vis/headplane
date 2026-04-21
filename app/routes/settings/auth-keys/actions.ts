@@ -1,21 +1,40 @@
 import { data } from "react-router";
 
+import { getOidcSubject } from "~/server/web/headscale-identity";
 import { Capabilities } from "~/server/web/roles";
+import type { PreAuthKey } from "~/types";
 
 import type { Route } from "./+types/overview";
 
 export async function authKeysAction({ request, context }: Route.ActionArgs) {
-  const session = await context.sessions.auth(request);
-  const check = await context.sessions.check(request, Capabilities.generate_authkeys);
+  const principal = await context.auth.require(request);
+  const apiKey = context.auth.getHeadscaleApiKey(principal);
+  const api = context.hsApi.getRuntimeClient(apiKey);
 
-  if (!check) {
+  const canGenerateAny = context.auth.can(principal, Capabilities.generate_authkeys);
+  const canGenerateOwn = context.auth.can(principal, Capabilities.generate_own_authkeys);
+
+  if (!canGenerateAny && !canGenerateOwn) {
     throw data("You do not have permission to manage pre-auth keys", {
       status: 403,
     });
   }
 
+  async function checkSelfServiceOwnership(userId: string) {
+    if (canGenerateAny || !canGenerateOwn) return;
+    const [targetUser] = await api.getUsers(userId);
+    if (!targetUser) {
+      throw data("User not found.", { status: 404 });
+    }
+    const targetSubject = getOidcSubject(targetUser);
+    if (principal.kind !== "oidc" || targetSubject !== principal.user.subject) {
+      throw data("You do not have permission to manage this user's pre-auth keys", {
+        status: 403,
+      });
+    }
+  }
+
   const formData = await request.formData();
-  const api = context.hsApi.getRuntimeClient(session.api_key);
   const action = formData.get("action_id")?.toString();
   if (!action) {
     throw data("Missing `action_id` in the form data.", {
@@ -36,6 +55,10 @@ export async function authKeysAction({ request, context }: Route.ActionArgs) {
         return data("Must specify either a user or ACL tags.", {
           status: 400,
         });
+      }
+
+      if (user) {
+        await checkSelfServiceOwnership(user);
       }
 
       const expiry = formData.get("expiry")?.toString();
@@ -73,10 +96,12 @@ export async function authKeysAction({ request, context }: Route.ActionArgs) {
 
       return data({ success: true as const, key: key.key });
     }
+
     case "expire_preauthkey": {
+      const keyId = formData.get("key_id")?.toString();
       const key = formData.get("key")?.toString();
-      if (!key) {
-        return data("Missing `key` in the form data.", {
+      if (!keyId || !key) {
+        return data("Missing `key_id` or `key` in the form data.", {
           status: 400,
         });
       }
@@ -88,9 +113,11 @@ export async function authKeysAction({ request, context }: Route.ActionArgs) {
         });
       }
 
-      await api.expirePreAuthKey(user, key);
+      await checkSelfServiceOwnership(user);
+      await api.expirePreAuthKey(user, { id: keyId, key } as unknown as PreAuthKey);
       return data("Pre-auth key expired");
     }
+
     default:
       return data("Invalid action", {
         status: 400,
