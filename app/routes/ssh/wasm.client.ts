@@ -1,3 +1,5 @@
+const WASM_HELPER_URL = `${__PREFIX__}/wasm_exec.js`;
+
 declare global {
   type HeadplaneSSHFactory = (config: HeadplaneSSHConfig) => HeadplaneSSH;
   var __hp_ssh_resolve: ((factory: HeadplaneSSHFactory) => void) | undefined;
@@ -41,6 +43,67 @@ export interface TunnelSession {
 }
 
 let resolvedFactory: Promise<HeadplaneSSHFactory> | null = null;
+let goRuntimeReady: Promise<void> | null = null;
+
+async function waitForGoRuntime(timeoutMs = 5000): Promise<void> {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    if (typeof globalThis.Go === "function") {
+      return;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+
+  throw new Error("Timed out waiting for Go runtime to initialize");
+}
+
+async function ensureGoRuntime(): Promise<void> {
+  if (typeof globalThis.Go === "function") {
+    return;
+  }
+
+  if (!goRuntimeReady) {
+    goRuntimeReady = new Promise<void>((resolve, reject) => {
+      const existing = document.querySelector<HTMLScriptElement>(
+        `script[src="${WASM_HELPER_URL}"]`,
+      );
+
+      const onLoad = () => {
+        void waitForGoRuntime().then(resolve, reject);
+      };
+
+      const onError = () => reject(new Error(`Failed to load ${WASM_HELPER_URL}`));
+
+      if (existing) {
+        if (typeof globalThis.Go === "function") {
+          resolve();
+          return;
+        }
+
+        // If the script tag already exists, it may have loaded before we attached
+        // listeners. Poll for the runtime so cached/fast loads don't race us.
+        void waitForGoRuntime().then(resolve, () => {
+          existing.addEventListener("load", onLoad, { once: true });
+          existing.addEventListener("error", onError, { once: true });
+        });
+        return;
+      }
+
+      const script = document.createElement("script");
+      script.src = WASM_HELPER_URL;
+      script.async = false;
+      script.defer = false;
+      script.crossOrigin = "anonymous";
+      script.addEventListener("load", onLoad, { once: true });
+      script.addEventListener("error", onError, { once: true });
+      document.head.appendChild(script);
+    });
+  }
+
+  await goRuntimeReady;
+}
 
 /**
  * One-shot function that loads the Go WASM binary and returns the SSH factory.
@@ -48,6 +111,7 @@ let resolvedFactory: Promise<HeadplaneSSHFactory> | null = null;
  */
 export async function loadHeadplaneWASM(moduleUrl: string): Promise<HeadplaneSSHFactory> {
   if (!resolvedFactory) {
+    await ensureGoRuntime();
     const go = new Go();
     const result = await WebAssembly.instantiateStreaming(fetch(moduleUrl), go.importObject);
 

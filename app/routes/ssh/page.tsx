@@ -1,7 +1,6 @@
 import { Loader2, WifiOff } from "lucide-react";
 import { useEffect, useState } from "react";
 import { data, isRouteErrorResponse, type ShouldRevalidateFunction } from "react-router";
-import { ExternalScriptsHandle } from "remix-utils/external-scripts";
 
 import Button from "~/components/button";
 import Card from "~/components/card";
@@ -16,8 +15,6 @@ import type { HeadplaneSSH } from "./wasm.client";
 import { loadHeadplaneWASM } from "./wasm.client";
 
 const WASM_MODULE_URL = `${__PREFIX__}/hp_ssh.wasm`;
-const WASM_MODULE_ASSET_PATH = "/hp_ssh.wasm";
-const WASM_HELPER_ASSET_PATH = "/wasm_exec.js";
 
 export const shouldRevalidate: ShouldRevalidateFunction = () => {
   return false;
@@ -65,7 +62,7 @@ export async function loader({ request, params, context }: Route.LoaderArgs) {
     hsUser.id,
     true,
     false,
-    new Date(Date.now() + 60 * 1000), // 1 minute expiry
+    new Date(Date.now() + 10 * 60 * 1000), // 10 minute expiry
     null,
   );
 
@@ -87,26 +84,6 @@ function generateHostname(username: string) {
   const hex = crypto.randomUUID().replace(/-/g, "").slice(0, 8);
   return `ssh-${hex}-${username}`;
 }
-
-export const links: Route.LinksFunction = () => [
-  {
-    rel: "preload",
-    href: WASM_MODULE_ASSET_PATH,
-    as: "fetch",
-    type: "application/wasm",
-    crossOrigin: "anonymous",
-  },
-];
-
-export const handle: ExternalScriptsHandle = {
-  scripts: [
-    {
-      src: WASM_HELPER_ASSET_PATH,
-      crossOrigin: "anonymous",
-      preload: true,
-    },
-  ],
-};
 
 export default function Page({ loaderData }: Route.ComponentProps) {
   const { hostname, username, offline, node } = loaderData;
