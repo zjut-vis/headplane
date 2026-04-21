@@ -92,7 +92,7 @@ export async function loader({ request, context }: Route.LoaderArgs) {
       .values({
         id: ulid(),
         sub: claims.sub,
-        caps: userCount === 0 ? Roles.owner : Roles.member,
+        caps: userCount === 0 ? Roles.owner : Roles.admin,
       })
       .onConflictDoNothing();
 
