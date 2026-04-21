@@ -25,9 +25,9 @@ jobs:
       matrix:
         include:
           - target: final
-            tag: 'next'
+            tag: "next"
           - target: debug-shell
-            tag: 'next-shell'
+            tag: "next-shell"
 
     steps:
       - name: Check out the repo
@@ -69,6 +69,7 @@ jobs:
           cache-to: type=gha,mode=max
           build-args: |
             IMAGE_TAG=ghcr.io/${{ github.repository }}:${{ matrix.tag }}
+            HEADPLANE_VERSION=next+${{ github.sha }}
           secrets: |
             gh_token=${{ secrets.GITHUB_TOKEN }}
 

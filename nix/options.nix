@@ -44,6 +44,13 @@ in {
                   description = "The port to listen on.";
                 };
 
+                base_url = mkOption {
+                  type = types.str;
+                  default = "http://localhost:3000";
+                  description = "The base URL for Headplane, not including the dashboard prefix (/admin) portion";
+                  example = "http://localhost:3000";
+                };
+
                 cookie_secret_path = mkOption {
                   type = types.nullOr types.path;
                   default = null;
@@ -64,6 +71,25 @@ in {
                   '';
                 };
 
+                cookie_max_age = mkOption {
+                  type = types.int;
+                  default = 86400;
+                  description = "The maximum age of the session cookie in seconds.";
+                  example = "3600";
+                };
+
+                cookie_domain = mkOption {
+                  type = types.nullOr types.str;
+                  default = null;
+                  description = ''
+                    This is not required, but if you want to restrict the
+                    cookie to a specific domain, set it here. Otherwise leave
+                    it commented out. This may not work as expected if not
+                    using a reverse proxy.
+                  '';
+                  example = "headscale.example.com";
+                };
+
                 data_path = mkOption {
                   type = types.path;
                   default = "/var/lib/headplane";
@@ -73,6 +99,13 @@ in {
                     Data formats prior to 0.6.1 will automatically be migrated.
                   '';
                   example = "/var/lib/headplane";
+                };
+
+                info_secret = mkOption {
+                  type = types.nullOr types.str;
+                  default = null;
+                  description = "Secret is optional and allows access to certain debug endpoints";
+                  example = "config.sops.secrets.info_secret.path";
                 };
               };
             };
@@ -248,6 +281,27 @@ in {
                   example = "https://provider.example.com/issuer-url";
                 };
 
+                authorization_endpoint = mkOption {
+                  type = types.nullOr types.str;
+                  default = null;
+                  description = "Optionally override authorization_endpoint";
+                  example = "https://provider.example.com/authorization_endpoint";
+                };
+
+                token_endpoint = mkOption {
+                  type = types.nullOr types.str;
+                  default = null;
+                  description = "Optionally override token_endpoint";
+                  example = "https://provider.example.com/token_endpoint";
+                };
+
+                userinfo_endpoint = mkOption {
+                  type = types.nullOr types.str;
+                  default = null;
+                  description = "Optionally override userinfo_endpoint";
+                  example = "https://provider.example.com/userinfo_endpoint";
+                };
+
                 client_id = mkOption {
                   type = types.str;
                   default = "";
@@ -289,16 +343,6 @@ in {
                   example = "config.sops.secrets.headscale_api_key.path";
                 };
 
-                redirect_uri = mkOption {
-                  type = types.str;
-                  default = "";
-                  description = ''
-                    This should point to your publicly accessible URL
-                    for your Headplane instance with /admin/oidc/callback.
-                  '';
-                  example = "https://headscale.example.com/admin/oidc/callback";
-                };
-
                 user_storage_file = mkOption {
                   type = types.path;
                   default = "/var/lib/headplane/users.json";
@@ -306,6 +350,12 @@ in {
                     Path to a file containing the users and their permissions for Headplane.
                   '';
                   example = "/var/lib/headplane/users.json";
+                };
+
+                use_pkce = mkOption {
+                  type = types.bool;
+                  default = false;
+                  description = "Whether to use PKCE when authenticating users.";
                 };
               };
             };

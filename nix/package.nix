@@ -28,15 +28,15 @@ in
 
   pnpmDeps = pnpm_10.fetchDeps {
     inherit (finalAttrs) pname version src;
-    hash = "sha256-KyUcaR2Lvu5kT8arr4ZO8rCa5HWXTqmk8C7P8WoYK+c=";
-	fetcherVersion = 1;
+		hash = "sha256-Xtooqpibv4fuJczUfJDlGt2+5KuoKq/TUUhLKE+ierA=";
+		fetcherVersion = 1;
   };
 
     buildPhase = ''
       runHook preBuild
       cp ${headplane-ssh-wasm}/hp_ssh.wasm app/hp_ssh.wasm
       cp ${headplane-ssh-wasm}/wasm_exec.js app/wasm_exec.js
-      pnpm build
+      pnpm react-router build
       runHook postBuild
     '';
 

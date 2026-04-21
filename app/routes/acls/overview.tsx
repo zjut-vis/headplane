@@ -1,34 +1,31 @@
-import { Construction, Eye, FlaskConical, Pencil } from 'lucide-react';
-import { useEffect, useState } from 'react';
 import {
-	ActionFunctionArgs,
-	LoaderFunctionArgs,
-	useFetcher,
-	useLoaderData,
-	useRevalidator,
-} from 'react-router';
+	AlertCircle,
+	Construction,
+	Eye,
+	FlaskConical,
+	Pencil,
+} from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { isRouteErrorResponse, useFetcher, useRevalidator } from 'react-router';
 import Button from '~/components/Button';
+import Card from '~/components/Card';
 import Code from '~/components/Code';
 import Link from '~/components/Link';
 import Notice from '~/components/Notice';
 import Tabs from '~/components/Tabs';
-import type { LoadContext } from '~/server';
+import { isApiError } from '~/server/headscale/api/error-client';
 import toast from '~/utils/toast';
+import type { Route } from './+types/overview';
 import { aclAction } from './acl-action';
 import { aclLoader } from './acl-loader';
 import { Differ, Editor } from './components/cm.client';
 
-export async function loader(request: LoaderFunctionArgs<LoadContext>) {
-	return aclLoader(request);
-}
+export const loader = aclLoader;
+export const action = aclAction;
 
-export async function action(request: ActionFunctionArgs<LoadContext>) {
-	return aclAction(request);
-}
-
-export default function Page() {
-	// Access is a write check here, we already check read in aclLoader
-	const { access, writable, policy } = useLoaderData<typeof loader>();
+export default function Page({
+	loaderData: { access, writable, policy },
+}: Route.ComponentProps) {
 	const [codePolicy, setCodePolicy] = useState(policy);
 	const fetcher = useFetcher<typeof action>();
 	const { revalidate } = useRevalidator();
@@ -75,15 +72,15 @@ export default function Page() {
 				The ACL file is used to define the access control rules for your
 				network. You can find more information about the ACL file in the{' '}
 				<Link
-					to="https://tailscale.com/kb/1018/acls"
 					name="Tailscale ACL documentation"
+					to="https://tailscale.com/kb/1018/acls"
 				>
 					Tailscale ACL guide
 				</Link>{' '}
 				and the{' '}
 				<Link
-					to="https://headscale.net/stable/ref/acls/"
 					name="Headscale ACL documentation"
+					to="https://headscale.net/stable/ref/acls/"
 				>
 					Headscale docs
 				</Link>
@@ -91,14 +88,14 @@ export default function Page() {
 			</p>
 			{fetcher.data?.error !== undefined ? (
 				<Notice
-					variant="error"
 					title={fetcher.data.error.split(':')[0] ?? 'Error'}
+					variant="error"
 				>
 					{fetcher.data.error.split(':').slice(1).join(': ') ??
 						'An unknown error occurred while trying to update the ACL policy.'}
 				</Notice>
 			) : undefined}
-			<Tabs label="ACL Editor" className="mb-4">
+			<Tabs className="mb-4" label="ACL Editor">
 				<Tabs.Item
 					key="edit"
 					title={
@@ -110,8 +107,8 @@ export default function Page() {
 				>
 					<Editor
 						isDisabled={disabled}
-						value={codePolicy}
 						onChange={setCodePolicy}
+						value={codePolicy}
 					/>
 				</Tabs.Item>
 				<Tabs.Item
@@ -145,7 +142,6 @@ export default function Page() {
 				</Tabs.Item>
 			</Tabs>
 			<Button
-				variant="heavy"
 				className="mr-2"
 				isDisabled={
 					disabled ||
@@ -158,6 +154,7 @@ export default function Page() {
 					formData.append('policy', codePolicy);
 					fetcher.submit(formData, { method: 'PATCH' });
 				}}
+				variant="heavy"
 			>
 				Save
 			</Button>
@@ -174,4 +171,50 @@ export default function Page() {
 			</Button>
 		</div>
 	);
+}
+
+export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
+	if (
+		isRouteErrorResponse(error) &&
+		isApiError(error.data) &&
+		error.data.rawData.includes('reading policy from path') &&
+		error.data.rawData.includes('no such file or directory')
+	) {
+		return (
+			<div className="flex flex-col gap-4">
+				<Card className="max-w-2xl" variant="flat">
+					<div className="flex items-center justify-between gap-4">
+						<Card.Title>ACL Policy Unavailable</Card.Title>
+						<AlertCircle className="w-6 h-6 mb-2 text-red-500" />
+					</div>
+					<Card.Text>
+						The ACL policy is currently unavailable because the policy file does
+						not exist on the server. This usually indicates that Headscale is
+						running in <Code>file</Code> mode for ACLs, and the specified policy
+						file is missing.
+					</Card.Text>
+				</Card>
+				<Card className="max-w-2xl" variant="flat">
+					<Card.Text>
+						In order to resolve this issue, there are two possible actions you
+						can take:
+					</Card.Text>
+					<ul className="list-disc list-outside mt-2 ml-4 space-y-1 text-sm">
+						<li>
+							Create the ACL policy file at the specified path in your Headscale
+							configuration.
+						</li>
+						<li>
+							Alternatively, you can switch Headscale to use{' '}
+							<Code>database</Code> mode for ACLs by updating your Headscale
+							configuration. This will allow Headplane to manage the ACL policy
+							directly through the web interface.
+						</li>
+					</ul>
+				</Card>
+			</div>
+		);
+	}
+
+	throw error;
 }

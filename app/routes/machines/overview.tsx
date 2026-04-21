@@ -1,157 +1,381 @@
-import { Info } from 'lucide-react';
-import type { ActionFunctionArgs, LoaderFunctionArgs } from 'react-router';
-import { useLoaderData } from 'react-router';
-import Code from '~/components/Code';
-import Link from '~/components/Link';
-import Tooltip from '~/components/Tooltip';
-import type { LoadContext } from '~/server';
-import { Capabilities } from '~/server/web/roles';
-import type { Machine, User } from '~/types';
-import cn from '~/utils/cn';
-import { mapNodes } from '~/utils/node-info';
-import MachineRow from './components/machine-row';
-import NewMachine from './dialogs/new';
-import { machineAction } from './machine-actions';
+import { ChevronDown, ChevronUp, Info, X } from "lucide-react";
+import { useMemo, useState } from "react";
 
-export async function loader({
-	request,
-	context,
-}: LoaderFunctionArgs<LoadContext>) {
-	const session = await context.sessions.auth(request);
-	const user = session.user;
-	if (!user) {
-		throw new Error('Missing user session. Please log in again.');
-	}
+import Code from "~/components/Code";
+import Input from "~/components/Input";
+import Link from "~/components/Link";
+import Tooltip from "~/components/Tooltip";
+import { Capabilities } from "~/server/web/roles";
+import cn from "~/utils/cn";
+import { mapNodes, sortNodeTags } from "~/utils/node-info";
 
-	const check = await context.sessions.check(
-		request,
-		Capabilities.read_machines,
-	);
+import type { Route } from "./+types/overview";
 
-	if (!check) {
-		// Not authorized to view this page
-		throw new Error(
-			'You do not have permission to view this page. Please contact your administrator.',
-		);
-	}
+import MachineRow from "./components/machine-row";
+import NewMachine from "./dialogs/new";
+import { machineAction } from "./machine-actions";
 
-	const writablePermission = await context.sessions.check(
-		request,
-		Capabilities.write_machines,
-	);
+export async function loader({ request, context }: Route.LoaderArgs) {
+  const session = await context.sessions.auth(request);
+  const user = session.user;
+  if (!user) {
+    throw new Error("Missing user session. Please log in again.");
+  }
 
-	const [{ nodes }, { users }] = await Promise.all([
-		context.client.get<{ nodes: Machine[] }>('v1/node', session.api_key),
-		context.client.get<{ users: User[] }>('v1/user', session.api_key),
-	]);
+  const check = await context.sessions.check(request, Capabilities.read_machines);
 
-	let magic: string | undefined;
-	if (context.hs.readable()) {
-		if (context.hs.c?.dns.magic_dns) {
-			magic = context.hs.c.dns.base_domain;
-		}
-	}
+  if (!check) {
+    // Not authorized to view this page
+    throw new Error(
+      "You do not have permission to view this page. Please contact your administrator.",
+    );
+  }
 
-	const stats = await context.agents?.lookup(nodes.map((node) => node.nodeKey));
-	const populatedNodes = mapNodes(nodes, stats);
+  const writablePermission = await context.sessions.check(request, Capabilities.write_machines);
 
-	return {
-		populatedNodes,
-		nodes,
-		users,
-		magic,
-		server: context.config.headscale.url,
-		publicServer: context.config.headscale.public_url,
-		agent: context.agents?.agentID(),
-		writable: writablePermission,
-		preAuth: await context.sessions.check(
-			request,
-			Capabilities.generate_authkeys,
-		),
-		subject: user.subject,
-	};
+  const api = context.hsApi.getRuntimeClient(session.api_key);
+  const [nodes, users] = await Promise.all([api.getNodes(), api.getUsers()]);
+
+  let magic: string | undefined;
+  if (context.hs.readable()) {
+    if (context.hs.c?.dns.magic_dns) {
+      magic = context.hs.c.dns.base_domain;
+    }
+  }
+
+  const stats = await context.agents?.lookup(nodes.map((node) => node.nodeKey));
+  const populatedNodes = mapNodes(nodes, stats);
+  const supportsNodeOwnerChange = !context.hsApi.clientHelpers.isAtleast("0.28.0-beta.1");
+
+  return {
+    populatedNodes,
+    nodes,
+    users,
+    magic,
+    server: context.config.headscale.url,
+    publicServer: context.config.headscale.public_url,
+    agent: context.agents?.agentID(),
+    writable: writablePermission,
+    preAuth: await context.sessions.check(request, Capabilities.generate_authkeys),
+    subject: user.subject,
+    supportsNodeOwnerChange: supportsNodeOwnerChange,
+  };
 }
 
-export async function action(request: ActionFunctionArgs) {
-	return machineAction(request);
-}
+export const action = machineAction;
 
-export default function Page() {
-	const data = useLoaderData<typeof loader>();
+type SortField = "name" | "ip" | "version" | "lastSeen";
 
-	return (
-		<>
-			<div className="flex justify-between items-center mb-6">
-				<div className="flex flex-col w-2/3">
-					<h1 className="text-2xl font-medium mb-2">Machines</h1>
-					<p>
-						Manage the devices connected to your Tailnet.{' '}
-						<Link
-							name="Tailscale Manage Devices Documentation"
-							to="https://tailscale.com/kb/1372/manage-devices"
-						>
-							Learn more
-						</Link>
-					</p>
-				</div>
-				<NewMachine
-					disabledKeys={data.preAuth ? [] : ['pre-auth']}
-					isDisabled={!data.writable}
-					server={data.publicServer ?? data.server}
-					users={data.users}
-				/>
-			</div>
-			<table className="table-auto w-full rounded-lg">
-				<thead className="text-headplane-600 dark:text-headplane-300">
-					<tr className="text-left px-0.5">
-						<th className="uppercase text-xs font-bold pb-2">Name</th>
-						<th className="pb-2 w-1/4">
-							<div className="flex items-center gap-x-1">
-								<p className="uppercase text-xs font-bold">Addresses</p>
-								{data.magic ? (
-									<Tooltip>
-										<Info className="w-4 h-4" />
-										<Tooltip.Body className="font-normal">
-											Since MagicDNS is enabled, you can access devices based on
-											their name and also at{' '}
-											<Code>
-												[name].
-												{data.magic}
-											</Code>
-										</Tooltip.Body>
-									</Tooltip>
-								) : undefined}
-							</div>
-						</th>
-						{/* We only want to show the version column if there are agents */}
-						{data.agent !== undefined ? (
-							<th className="uppercase text-xs font-bold pb-2">Version</th>
-						) : undefined}
-						<th className="uppercase text-xs font-bold pb-2">Last Seen</th>
-					</tr>
-				</thead>
-				<tbody
-					className={cn(
-						'divide-y divide-headplane-100 dark:divide-headplane-800 align-top',
-						'border-t border-headplane-100 dark:border-headplane-800',
-					)}
-				>
-					{data.populatedNodes.map((machine) => (
-						<MachineRow
-							isAgent={data.agent ? data.agent === machine.nodeKey : undefined}
-							isDisabled={
-								data.writable
-									? false // If the user has write permissions, they can edit all machines
-									: machine.user.providerId?.split('/').pop() !== data.subject
-							}
-							key={machine.id}
-							magic={data.magic}
-							node={machine}
-							users={data.users}
-						/>
-					))}
-				</tbody>
-			</table>
-		</>
-	);
+export default function Page({ loaderData }: Route.ComponentProps) {
+  const [searchQuery, setSearchQuery] = useState("");
+  const [sortField, setSortField] = useState<SortField>("name");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
+
+  const filteredAndSortedNodes = useMemo(() => {
+    const query = searchQuery.toLowerCase().trim();
+
+    let nodes = loaderData.populatedNodes.filter((node) => {
+      if (!query) return true;
+      if (node.givenName.toLowerCase().includes(query)) return true;
+      if (node.ipAddresses.some((ip) => ip.toLowerCase().includes(query))) return true;
+      return false;
+    });
+
+    nodes = [...nodes].sort((a, b) => {
+      let comparison = 0;
+
+      switch (sortField) {
+        case "name":
+          comparison = a.givenName.localeCompare(b.givenName);
+          break;
+        case "ip": {
+          const getIPv4 = (addresses: string[]) =>
+            addresses.find((ip) => !ip.includes(":")) || addresses[0] || "";
+          const ipA = getIPv4(a.ipAddresses);
+          const ipB = getIPv4(b.ipAddresses);
+
+          if (!ipA.includes(":") && !ipB.includes(":")) {
+            const octetsA = ipA.split(".").map(Number);
+            const octetsB = ipB.split(".").map(Number);
+            for (let i = 0; i < 4; i++) {
+              if (octetsA[i] !== octetsB[i]) {
+                comparison = octetsA[i] - octetsB[i];
+                break;
+              }
+            }
+          } else {
+            comparison = ipA.localeCompare(ipB);
+          }
+          break;
+        }
+        case "version": {
+          const versionA = a.hostInfo?.IPNVersion?.split("-")[0] || "0";
+          const versionB = b.hostInfo?.IPNVersion?.split("-")[0] || "0";
+          const partsA = versionA.split(".").map(Number);
+          const partsB = versionB.split(".").map(Number);
+          const maxLen = Math.max(partsA.length, partsB.length);
+
+          for (let i = 0; i < maxLen; i++) {
+            const segA = partsA[i] || 0;
+            const segB = partsB[i] || 0;
+            if (segA !== segB) {
+              comparison = segA - segB;
+              break;
+            }
+          }
+          break;
+        }
+        case "lastSeen":
+          if (a.online !== b.online) {
+            comparison = a.online ? 1 : -1;
+            break;
+          }
+          comparison = new Date(a.lastSeen).getTime() - new Date(b.lastSeen).getTime();
+          break;
+      }
+
+      return sortDirection === "asc" ? comparison : -comparison;
+    });
+
+    return nodes;
+  }, [loaderData.populatedNodes, searchQuery, sortField, sortDirection]);
+
+  const handleSort = (field: SortField) => {
+    if (sortField === field) {
+      setSortDirection((prev) => (prev === "asc" ? "desc" : "asc"));
+    } else {
+      setSortField(field);
+      setSortDirection("asc");
+    }
+  };
+
+  return (
+    <>
+      <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col">
+          <h1 className="mb-2 text-2xl font-medium">Machines</h1>
+          <p>
+            Manage the devices connected to your Tailnet.{" "}
+            <Link
+              name="Tailscale Manage Devices Documentation"
+              to="https://tailscale.com/kb/1372/manage-devices"
+            >
+              Learn more
+            </Link>
+          </p>
+        </div>
+        <NewMachine
+          disabledKeys={loaderData.preAuth ? [] : ["pre-auth"]}
+          isDisabled={!loaderData.writable}
+          server={loaderData.publicServer ?? loaderData.server}
+          users={loaderData.users}
+        />
+      </div>
+      <div className="mb-4 flex items-center gap-4">
+        <div className="relative w-64">
+          <Input
+            label="Search machines"
+            labelHidden
+            maxLength={100}
+            onChange={(value) => setSearchQuery(value.slice(0, 100))}
+            placeholder="Search by name or IP address..."
+            value={searchQuery}
+          />
+          {searchQuery && (
+            <button
+              aria-label="Clear search"
+              className={cn(
+                "absolute right-2 top-1/2 -translate-y-1/2",
+                "p-1 rounded-full",
+                "text-headplane-400 hover:text-headplane-600",
+                "dark:text-headplane-500 dark:hover:text-headplane-300",
+                "hover:bg-headplane-100 dark:hover:bg-headplane-800",
+              )}
+              onClick={() => setSearchQuery("")}
+              type="button"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
+        </div>
+        <span className="text-headplane-500 text-sm whitespace-nowrap">
+          {searchQuery
+            ? `Showing ${filteredAndSortedNodes.length} of ${loaderData.populatedNodes.length} machines`
+            : `${loaderData.populatedNodes.length} machines`}
+        </span>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[640px] table-auto rounded-lg">
+          <thead className="text-headplane-600 dark:text-headplane-300">
+            <tr className="px-0.5 text-left">
+              <th
+                aria-sort={
+                  sortField === "name"
+                    ? sortDirection === "asc"
+                      ? "ascending"
+                      : "descending"
+                    : "none"
+                }
+                className="pb-2 text-xs font-bold uppercase"
+              >
+                <button
+                  aria-label="Sort by name"
+                  className={cn(
+                    "flex items-center gap-x-1 cursor-pointer",
+                    "hover:text-headplane-900 dark:hover:text-headplane-100",
+                  )}
+                  onClick={() => handleSort("name")}
+                  type="button"
+                >
+                  Name
+                  {sortField === "name" &&
+                    (sortDirection === "asc" ? (
+                      <ChevronUp className="h-3 w-3" />
+                    ) : (
+                      <ChevronDown className="h-3 w-3" />
+                    ))}
+                </button>
+              </th>
+              <th
+                aria-sort={
+                  sortField === "ip"
+                    ? sortDirection === "asc"
+                      ? "ascending"
+                      : "descending"
+                    : "none"
+                }
+                className="w-1/4 pb-2"
+              >
+                <div className="flex items-center gap-x-1">
+                  <button
+                    aria-label="Sort by IP address"
+                    className={cn(
+                      "flex items-center gap-x-1 cursor-pointer uppercase text-xs font-bold",
+                      "hover:text-headplane-900 dark:hover:text-headplane-100",
+                    )}
+                    onClick={() => handleSort("ip")}
+                    type="button"
+                  >
+                    Addresses
+                    {sortField === "ip" &&
+                      (sortDirection === "asc" ? (
+                        <ChevronUp className="h-3 w-3" />
+                      ) : (
+                        <ChevronDown className="h-3 w-3" />
+                      ))}
+                  </button>
+                  {loaderData.magic ? (
+                    <Tooltip>
+                      <Info className="h-4 w-4" />
+                      <Tooltip.Body className="font-normal">
+                        Since MagicDNS is enabled, you can access devices based on their name and
+                        also at{" "}
+                        <Code>
+                          [name].
+                          {loaderData.magic}
+                        </Code>
+                      </Tooltip.Body>
+                    </Tooltip>
+                  ) : undefined}
+                </div>
+              </th>
+              {/* We only want to show the version column if there are agents */}
+              {loaderData.agent !== undefined ? (
+                <th
+                  aria-sort={
+                    sortField === "version"
+                      ? sortDirection === "asc"
+                        ? "ascending"
+                        : "descending"
+                      : "none"
+                  }
+                  className="pb-2 text-xs font-bold uppercase"
+                >
+                  <button
+                    aria-label="Sort by version"
+                    className={cn(
+                      "flex items-center gap-x-1 cursor-pointer",
+                      "hover:text-headplane-900 dark:hover:text-headplane-100",
+                    )}
+                    onClick={() => handleSort("version")}
+                    type="button"
+                  >
+                    Version
+                    {sortField === "version" &&
+                      (sortDirection === "asc" ? (
+                        <ChevronUp className="h-3 w-3" />
+                      ) : (
+                        <ChevronDown className="h-3 w-3" />
+                      ))}
+                  </button>
+                </th>
+              ) : undefined}
+              <th
+                aria-sort={
+                  sortField === "lastSeen"
+                    ? sortDirection === "asc"
+                      ? "ascending"
+                      : "descending"
+                    : "none"
+                }
+                className="pb-2 text-xs font-bold uppercase"
+              >
+                <button
+                  aria-label="Sort by last seen"
+                  className={cn(
+                    "flex items-center gap-x-1 cursor-pointer",
+                    "hover:text-headplane-900 dark:hover:text-headplane-100",
+                  )}
+                  onClick={() => handleSort("lastSeen")}
+                  type="button"
+                >
+                  Last Seen
+                  {sortField === "lastSeen" &&
+                    (sortDirection === "asc" ? (
+                      <ChevronUp className="h-3 w-3" />
+                    ) : (
+                      <ChevronDown className="h-3 w-3" />
+                    ))}
+                </button>
+              </th>
+            </tr>
+          </thead>
+          <tbody
+            className={cn(
+              "divide-y divide-headplane-100 dark:divide-headplane-800 align-top",
+              "border-t border-headplane-100 dark:border-headplane-800",
+            )}
+          >
+            {filteredAndSortedNodes.length === 0 ? (
+              <tr>
+                <td
+                  className="text-headplane-500 py-8 text-center"
+                  colSpan={loaderData.agent !== undefined ? 5 : 4}
+                >
+                  No machines found matching "{searchQuery}"
+                </td>
+              </tr>
+            ) : (
+              filteredAndSortedNodes.map((node) => (
+                <MachineRow
+                  existingTags={sortNodeTags(loaderData.nodes)}
+                  isAgent={loaderData.agent ? loaderData.agent === node.nodeKey : undefined}
+                  isDisabled={
+                    loaderData.writable
+                      ? false // If the user has write permissions, they can edit all machines
+                      : node.user?.providerId?.split("/").pop() !== loaderData.subject
+                  }
+                  key={node.id}
+                  magic={loaderData.magic}
+                  node={node}
+                  users={loaderData.users}
+                  supportsNodeOwnerChange={loaderData.supportsNodeOwnerChange}
+                />
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
 }

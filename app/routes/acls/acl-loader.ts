@@ -1,8 +1,7 @@
-import { LoaderFunctionArgs } from 'react-router';
-import { LoadContext } from '~/server';
-import ResponseError from '~/server/headscale/api-error';
+import { data } from 'react-router';
+import { isDataWithApiError } from '~/server/headscale/api/error-client';
 import { Capabilities } from '~/server/web/roles';
-import { data403 } from '~/utils/res';
+import type { Route } from './+types/overview';
 
 // The logic for deciding policy factors is very complicated because
 // there are so many factors that need to be accounted for:
@@ -11,15 +10,13 @@ import { data403 } from '~/utils/res';
 // 3. Is the Headscale policy in file or database mode?
 //    If database, we can read/write easily via the API.
 //    If in file mode, we can only write if context.config is available.
-// TODO: Consider adding back file editing mode instead of database
-export async function aclLoader({
-	request,
-	context,
-}: LoaderFunctionArgs<LoadContext>) {
+export async function aclLoader({ request, context }: Route.LoaderArgs) {
 	const session = await context.sessions.auth(request);
 	const check = await context.sessions.check(request, Capabilities.read_policy);
 	if (!check) {
-		throw data403('You do not have permission to read the ACL policy.');
+		throw data('You do not have permission to read the ACL policy.', {
+			status: 403,
+		});
 	}
 
 	const flags = {
@@ -30,35 +27,22 @@ export async function aclLoader({
 	};
 
 	// Try to load the ACL policy from the API.
+	const api = context.hsApi.getRuntimeClient(session.api_key);
 	try {
-		const { policy, updatedAt } = await context.client.get<{
-			policy: string;
-			updatedAt: string | null;
-		}>('v1/policy', session.api_key);
-
-		// Successfully loaded the policy, mark it as readable
-		// If `updatedAt` is null, it means the policy is in file mode.
+		const { policy, updatedAt } = await api.getPolicy();
 		flags.writable = updatedAt !== null;
 		flags.policy = policy;
 		return flags;
 	} catch (error) {
-		// This means Headscale returned a protobuf error to us
-		// It also means we 100% know this is in database mode
-		if (error instanceof ResponseError && error.responseObject?.message) {
-			const message = error.responseObject.message as string;
-			// This is stupid, refer to the link
-			// https://github.com/juanfont/headscale/blob/main/hscontrol/types/policy.go
-			if (message.includes('acl policy not found')) {
-				// This means the policy has never been initiated, and we can
-				// write to it to get it started or ignore it.
-				flags.policy = ''; // Start with an empty policy
+		if (isDataWithApiError(error)) {
+			// https://github.com/juanfont/headscale/blob/c4600346f9c29b514dc9725ac103efb9d0381f23/hscontrol/types/policy.go#L10
+			if (error.data.rawData.includes('acl policy not found')) {
+				flags.policy = '';
 				flags.writable = true;
+				return flags;
 			}
-
-			return flags;
 		}
 
-		// Otherwise, this is a Headscale error that we can just propagate.
 		throw error;
 	}
 }

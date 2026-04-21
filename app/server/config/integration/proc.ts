@@ -1,152 +1,64 @@
-import { readFile, readdir } from 'node:fs/promises';
-import { platform } from 'node:os';
-import { join, resolve } from 'node:path';
-import { kill } from 'node:process';
-import { setTimeout } from 'node:timers/promises';
-import { ApiClient } from '~/server/headscale/api-client';
-import log from '~/utils/log';
-import { HeadplaneConfig } from '../schema';
-import { Integration } from './abstract';
+import { type } from "arktype";
+import { platform } from "node:os";
 
-type T = NonNullable<HeadplaneConfig['integration']>['proc'];
-export default class ProcIntegration extends Integration<T> {
-	private pid: number | undefined;
-	private maxAttempts = 10;
+import type { RuntimeApiClient } from "~/server/headscale/api/endpoints";
 
-	get name() {
-		return 'Native Linux (/proc)';
-	}
+import log from "~/utils/log";
 
-	async isAvailable() {
-		if (platform() !== 'linux') {
-			log.error('config', '/proc is only available on Linux');
-			return false;
-		}
+import { Integration } from "./abstract";
+import { findHeadscaleServe, signalAndWaitHealthy } from "./proc-helper";
 
-		log.debug('config', 'Checking /proc for Headscale process');
-		const dir = resolve('/proc');
-		try {
-			const subdirs = await readdir(dir);
-			const promises = subdirs.map(async (dir) => {
-				const pid = Number.parseInt(dir, 10);
+const configSchema = {
+  full: type({
+    enabled: "boolean",
+  }),
 
-				if (Number.isNaN(pid)) {
-					return;
-				}
+  partial: type({
+    enabled: "boolean?",
+  }).partial(),
+};
 
-				const path = join('/proc', dir, 'comm');
-				try {
-					log.debug('config', 'Reading %s', path);
-					const data = await readFile(path, 'utf8');
-					if (data.trim() !== 'headscale') {
-						throw new Error(
-							`Found PID with unexpected command: ${data.trim()}`,
-						);
-					}
+export default class ProcIntegration extends Integration<typeof configSchema.full.infer> {
+  private pid: number | undefined;
 
-					return pid;
-				} catch (error) {
-					log.debug('config', 'Failed to read %s: %s', path, error);
-				}
-			});
+  get name() {
+    return "Native Linux (/proc)";
+  }
 
-			const results = await Promise.allSettled(promises);
-			const pids = [];
+  static get configSchema() {
+    return configSchema;
+  }
 
-			for (const result of results) {
-				if (result.status === 'fulfilled' && result.value) {
-					pids.push(result.value);
-				}
-			}
+  async isAvailable() {
+    if (platform() !== "linux") {
+      log.error("config", "/proc is only available on Linux");
+      return false;
+    }
 
-			log.debug('config', 'Found Headscale processes: %o', pids);
-			if (pids.length > 1) {
-				log.warn(
-					'config',
-					'Found %d Headscale processes: %s',
-					pids.length,
-					pids.join(', '),
-				);
-
-        log.debug('config', 'Checking if any of them have Parent PID = 1, assuming thats the correct PID');
-        const ppidRegex = /(?:PPid:\s)(\d+)(?:\n?)/;
-        for (const pid of pids) {
-          const pidStatusPath = join('/proc', pid.toString(), 'status');
-          try {
-            log.debug('config', 'Reading %s', pidStatusPath);
-            const pidData = await readFile(pidStatusPath, 'utf8');
-            const ppidResult = pidData.match(ppidRegex);
-
-            if (ppidResult !== null) {
-              const potentialPPid = Number.parseInt(ppidResult[1], 10);
-              if (potentialPPid === 1) {
-                this.pid = pid;
-                log.info('config', 'Found potential Headscale process with PID: %d based on Parent PID = 1', this.pid);
-                return true;
-              }
-            }
-          } catch (error) {
-            log.error('config', 'Failed to read %s: %s', pidStatusPath, error);
-          }
-        }
-
+    try {
+      const result = await findHeadscaleServe();
+      if (!result) {
+        log.error("config", "Could not find headscale serve process");
         return false;
       }
 
-			if (pids.length === 0) {
-				log.error('config', 'Could not find Headscale process');
-				return false;
-			}
+      this.pid = result;
+      log.info("config", "Found headscale serve (PID %d)", this.pid);
+      return true;
+    } catch (error) {
+      log.error("config", "Failed to scan /proc: %s", error);
+      return false;
+    }
+  }
 
-			this.pid = pids[0];
-			log.info('config', 'Found Headscale process with PID: %d', this.pid);
-			return true;
-		} catch {
-			log.error('config', 'Failed to read /proc');
-			return false;
-		}
-	}
+  async onConfigChange(client: RuntimeApiClient) {
+    if (!this.pid) {
+      return;
+    }
 
-	async onConfigChange(client: ApiClient) {
-		if (!this.pid) {
-			return;
-		}
-
-		try {
-			log.info('config', 'Sending SIGTERM to Headscale');
-			kill(this.pid, 'SIGTERM');
-		} catch (error) {
-			log.error('config', 'Failed to send SIGTERM to Headscale: %s', error);
-			log.debug('config', 'kill(1) error: %o', error);
-		}
-
-		await setTimeout(1000);
-		let attempts = 0;
-		while (attempts <= this.maxAttempts) {
-			try {
-				log.debug('config', 'Checking Headscale status (attempt %d)', attempts);
-				const status = await client.healthcheck();
-				if (status === false) {
-					log.error('config', 'Headscale is not running');
-					return;
-				}
-
-				log.info('config', 'Headscale is up and running');
-				return;
-			} catch (error) {
-				if (attempts < this.maxAttempts) {
-					attempts++;
-					await setTimeout(1000);
-					continue;
-				}
-
-				log.error(
-					'config',
-					'Missed restart deadline for Headscale (pid %d)',
-					this.pid,
-				);
-				return;
-			}
-		}
-	}
+    await signalAndWaitHealthy(client, {
+      pid: this.pid,
+      signal: "SIGHUP",
+    });
+  }
 }

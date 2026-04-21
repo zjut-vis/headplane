@@ -19,7 +19,7 @@ export default function RestrictionTable({
 	isDisabled,
 }: RestrictionProps) {
 	return (
-		<div className="w-2/3">
+		<div className="w-full sm:w-2/3">
 			<h2 className="text-2xl font-medium mt-8">
 				Permitted {type.charAt(0).toUpperCase() + type.slice(1)}s
 			</h2>
@@ -40,18 +40,18 @@ export default function RestrictionTable({
 							)}
 							<Form method="POST">
 								<input
-									type="hidden"
 									name="action_id"
+									type="hidden"
 									value={`remove_${type}`}
 								/>
-								<input type="hidden" name={type} value={value} />
+								<input name={type} type="hidden" value={value} />
 								<Button
-									isDisabled={isDisabled}
-									type="submit"
 									className={cn(
 										'px-2 py-1 rounded-md',
 										'text-red-500 dark:text-red-400',
 									)}
+									isDisabled={isDisabled}
+									type="submit"
 								>
 									Remove
 								</Button>
@@ -61,7 +61,7 @@ export default function RestrictionTable({
 				) : (
 					<TableList.Item className="flex flex-col items-center gap-2.5 py-4 opacity-70">
 						{iconForType(type)}
-						<p className="font-semibold">
+						<p className="font-semibold text-center">
 							All {type}s are permitted to authenticate.
 						</p>
 					</TableList.Item>

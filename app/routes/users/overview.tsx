@@ -1,138 +1,142 @@
-import { useEffect, useState } from 'react';
-import type { ActionFunctionArgs, LoaderFunctionArgs } from 'react-router';
-import { useLoaderData } from 'react-router';
-import type { LoadContext } from '~/server';
-import { Capabilities } from '~/server/web/roles';
-import { Machine, User } from '~/types';
-import cn from '~/utils/cn';
-import ManageBanner from './components/manage-banner';
-import UserRow from './components/user-row';
-import { userAction } from './user-actions';
+import { createHash } from "node:crypto";
+import { useEffect, useState } from "react";
+
+import type { Machine, User } from "~/types";
+
+import { Capabilities } from "~/server/web/roles";
+import cn from "~/utils/cn";
+
+import type { Route } from "./+types/overview";
+
+import ManageBanner from "./components/manage-banner";
+import UserRow from "./components/user-row";
+import { userAction } from "./user-actions";
 
 interface UserMachine extends User {
-	machines: Machine[];
+  machines: Machine[];
 }
 
-export async function loader({
-	request,
-	context,
-}: LoaderFunctionArgs<LoadContext>) {
-	const session = await context.sessions.auth(request);
-	const check = await context.sessions.check(request, Capabilities.read_users);
-	if (!check) {
-		// Not authorized to view this page
-		throw new Error(
-			'You do not have permission to view this page. Please contact your administrator.',
-		);
-	}
+export async function loader({ request, context }: Route.LoaderArgs) {
+  const session = await context.sessions.auth(request);
+  const check = await context.sessions.check(request, Capabilities.read_users);
+  if (!check) {
+    // Not authorized to view this page
+    throw new Error(
+      "You do not have permission to view this page. Please contact your administrator.",
+    );
+  }
 
-	const writablePermission = await context.sessions.check(
-		request,
-		Capabilities.write_users,
-	);
+  const writablePermission = await context.sessions.check(request, Capabilities.write_users);
 
-	const [machines, apiUsers] = await Promise.all([
-		context.client.get<{ nodes: Machine[] }>('v1/node', session.api_key),
-		context.client.get<{ users: User[] }>('v1/user', session.api_key),
-	]);
+  const api = context.hsApi.getRuntimeClient(session.api_key);
+  const [nodes, apiUsers] = await Promise.all([api.getNodes(), api.getUsers()]);
 
-	const users = apiUsers.users.map((user) => ({
-		...user,
-		machines: machines.nodes.filter((machine) => machine.user.id === user.id),
-	}));
+  const users = apiUsers.map((user) => ({
+    ...user,
+    machines: nodes.filter((node) => node.user?.id === user.id),
+    profilePicUrl:
+      context.config.oidc?.profile_picture_source === "gravatar"
+        ? (() => {
+            if (!user.email) {
+              return undefined;
+            }
 
-	const roles = await Promise.all(
-		users
-			.sort((a, b) => a.name.localeCompare(b.name))
-			.map(async (user) => {
-				if (user.provider !== 'oidc') {
-					return 'no-oidc';
-				}
+            const emailHash = user.email.trim().toLowerCase();
+            const hash = createHash("sha256").update(emailHash).digest("hex");
+            return `https://www.gravatar.com/avatar/${hash}?s=200&d=identicon&r=x`;
+          })()
+        : user.profilePicUrl,
+  }));
 
-				if (user.provider === 'oidc' && user.providerId) {
-					// For some reason, headscale makes providerID a url where the
-					// last component is the subject, so we need to strip that out
-					const subject = user.providerId.split('/').pop();
-					if (!subject) {
-						return 'invalid-oidc';
-					}
+  const roles = await Promise.all(
+    users
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map(async (user) => {
+        if (user.provider !== "oidc") {
+          return "no-oidc";
+        }
 
-					const role = await context.sessions.roleForSubject(subject);
-					return role ?? 'no-role';
-				}
+        if (user.provider === "oidc" && user.providerId) {
+          // For some reason, headscale makes providerID a url where the
+          // last component is the subject, so we need to strip that out
+          const subject = user.providerId.split("/").pop();
+          if (!subject) {
+            return "invalid-oidc";
+          }
 
-				// No role means the user is not registered in Headplane, but they
-				// are in Headscale. We also need to handle what happens if someone
-				// logs into the UI and they don't have a Headscale setup.
-				return 'no-role';
-			}),
-	);
+          const role = await context.sessions.roleForSubject(subject);
+          return role ?? "no-role";
+        }
 
-	let magic: string | undefined;
-	if (context.hs.readable()) {
-		if (context.hs.c?.dns.magic_dns) {
-			magic = context.hs.c.dns.base_domain;
-		}
-	}
+        // No role means the user is not registered in Headplane, but they
+        // are in Headscale. We also need to handle what happens if someone
+        // logs into the UI and they don't have a Headscale setup.
+        return "no-role";
+      }),
+  );
 
-	return {
-		writable: writablePermission, // whether the user can write to the API
-		oidc: context.config.oidc,
-		roles,
-		magic,
-		users,
-	};
+  let magic: string | undefined;
+  if (context.hs.readable()) {
+    if (context.hs.c?.dns.magic_dns) {
+      magic = context.hs.c.dns.base_domain;
+    }
+  }
+
+  return {
+    writable: writablePermission, // whether the user can write to the API
+    oidc: context.config.oidc
+      ? {
+          issuer: context.config.oidc.issuer,
+        }
+      : undefined,
+    roles,
+    magic,
+    users,
+  };
 }
 
-export async function action(data: ActionFunctionArgs) {
-	return userAction(data);
-}
+export const action = userAction;
 
-export default function Page() {
-	const data = useLoaderData<typeof loader>();
-	const [users, setUsers] = useState<UserMachine[]>(data.users);
+export default function Page({ loaderData }: Route.ComponentProps) {
+  const [users, setUsers] = useState<UserMachine[]>(loaderData.users);
 
-	// This useEffect is entirely for the purpose of updating the users when the
-	// drag and drop changes the machines between users. It's pretty hacky, but
-	// the idea is to treat data.users as the source of truth and update the
-	// local state when it changes.
-	useEffect(() => {
-		setUsers(data.users);
-	}, [data.users]);
+  // This useEffect is entirely for the purpose of updating the users when the
+  // drag and drop changes the machines between users. It's pretty hacky, but
+  // the idea is to treat data.users as the source of truth and update the
+  // local state when it changes.
+  useEffect(() => {
+    setUsers(loaderData.users);
+  }, [loaderData.users]);
 
-	return (
-		<>
-			<h1 className="text-2xl font-medium mb-1.5">Users</h1>
-			<p className="mb-8 text-md">
-				Manage the users in your network and their permissions.
-			</p>
-			<ManageBanner isDisabled={!data.writable} oidc={data.oidc} />
-			<table className="table-auto w-full rounded-lg">
-				<thead className="text-headplane-600 dark:text-headplane-300">
-					<tr className="text-left px-0.5">
-						<th className="uppercase text-xs font-bold pb-2">User</th>
-						<th className="uppercase text-xs font-bold pb-2">Role</th>
-						<th className="uppercase text-xs font-bold pb-2">Created At</th>
-						<th className="uppercase text-xs font-bold pb-2">Last Seen</th>
-					</tr>
-				</thead>
-				<tbody
-					className={cn(
-						'divide-y divide-headplane-100 dark:divide-headplane-800 align-top',
-						'border-t border-headplane-100 dark:border-headplane-800',
-					)}
-				>
-					{users
-						.sort((a, b) => a.name.localeCompare(b.name))
-						.map((user) => (
-							<UserRow
-								key={user.id}
-								role={data.roles[users.indexOf(user)]}
-								user={user}
-							/>
-						))}
-				</tbody>
-			</table>
-		</>
-	);
+  return (
+    <>
+      <h1 className="mb-1.5 text-2xl font-medium">Users</h1>
+      <p className="text-md mb-8">Manage the users in your network and their permissions.</p>
+      <ManageBanner isDisabled={!loaderData.writable} oidc={loaderData.oidc} />
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[640px] table-auto rounded-lg">
+          <thead className="text-headplane-600 dark:text-headplane-300">
+            <tr className="px-0.5 text-left">
+              <th className="pb-2 text-xs font-bold uppercase">User</th>
+              <th className="pb-2 text-xs font-bold uppercase">Role</th>
+              <th className="pb-2 text-xs font-bold uppercase">Created At</th>
+              <th className="pb-2 text-xs font-bold uppercase">Last Seen</th>
+            </tr>
+          </thead>
+          <tbody
+            className={cn(
+              "divide-y divide-headplane-100 dark:divide-headplane-800 align-top",
+              "border-t border-headplane-100 dark:border-headplane-800",
+            )}
+          >
+            {users
+              .sort((a, b) => a.name.localeCompare(b.name))
+              .map((user) => (
+                <UserRow key={user.id} role={loaderData.roles[users.indexOf(user)]} user={user} />
+              ))}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
 }

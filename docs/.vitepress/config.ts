@@ -3,33 +3,67 @@ import { defineConfig } from 'vitepress';
 export default defineConfig({
 	title: 'Headplane',
 	description: 'The missing dashboard for Headscale',
-	ignoreDeadLinks: ['/docs/Integrated-Mode', '/docs/Simple-Mode'],
 	cleanUrls: true,
+	head: [['link', { rel: 'icon', href: '/favicon.ico' }]],
 	themeConfig: {
+		logo: '/logo.svg',
 		nav: [
 			{ text: 'Home', link: '/' },
-			{ text: 'Sponsor Headplane', link: 'https://github.com/sponsors/tale' },
+			{ text: 'Changelog', link: '/CHANGELOG' },
 		],
+		search: {
+			provider: 'local',
+		},
 		sidebar: [
 			{
-				text: 'Chapters',
+				text: 'Getting Started',
 				items: [
-					{ text: 'Getting Started', link: '/README' },
-					{ text: 'Configuration', link: '/Configuration' },
-					{ text: 'Bare-Metal Mode', link: '/Bare-Metal' },
-					{ text: 'Integrated Mode', link: '/Integrated-Mode' },
-					{ text: 'Simple Mode', link: '/Simple-Mode' },
+					{ text: 'What is Headplane?', link: '/introduction' },
+					{
+						text: 'Installation',
+						link: '/install',
+						items: [
+							{ text: 'Limited Mode', link: '/install/limited-mode' },
+							{ text: 'Native Mode', link: '/install/native-mode' },
+							{ text: 'Docker', link: '/install/docker' },
+						],
+					},
+					{
+						text: 'Configuration',
+						link: '/configuration',
+						items: [
+							{ text: 'Common Issues', link: '/configuration/common-issues' },
+							{
+								text: 'Sensitive Values',
+								link: '/configuration#sensitive-values',
+							},
+						],
+					},
 					{ text: 'Nix', link: '/Nix' },
 					{ text: 'NixOS', link: '/NixOS-options' },
-					{ text: 'Security', link: '/SECURITY' },
-					{ text: 'Contributing', link: '/CONTRIBUTING' },
-					{ text: 'Changelog', link: '/CHANGELOG' },
+					{
+						text: 'Features',
+						items: [
+							{ text: 'Single Sign-On (SSO)', link: '/features/sso' },
+							{ text: 'Headplane Agent / SSH', link: '/features/agent' },
+						],
+					},
+					{
+						text: 'Development',
+						collapsed: true,
+						items: [
+							{ text: 'Contributing', link: '/CONTRIBUTING' },
+							{ text: 'Security', link: '/SECURITY' },
+						],
+					},
 				],
 			},
 		],
 
 		socialLinks: [
 			{ icon: 'github', link: 'https://github.com/tale/headplane' },
+			{ icon: 'githubsponsors', link: 'https://github.com/sponsors/tale' },
+			{ icon: 'kofi', link: 'https://ko-fi.com/atale' },
 		],
 
 		lastUpdated: {

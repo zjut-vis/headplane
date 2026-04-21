@@ -1,40 +1,35 @@
-import { ActionFunctionArgs, data } from 'react-router';
-import { LoadContext } from '~/server';
-import ResponseError from '~/server/headscale/api-error';
+import { data } from 'react-router';
+import { isDataWithApiError } from '~/server/headscale/api/error-client';
 import { Capabilities } from '~/server/web/roles';
-import { data400, data403 } from '~/utils/res';
+import type { Route } from './+types/overview';
 
 // We only check capabilities here and assume it is writable
 // If it isn't, it'll gracefully error anyways, since this means some
 // fishy client manipulation is happening.
-export async function aclAction({
-	request,
-	context,
-}: ActionFunctionArgs<LoadContext>) {
+export async function aclAction({ request, context }: Route.ActionArgs) {
 	const session = await context.sessions.auth(request);
 	const check = await context.sessions.check(
 		request,
 		Capabilities.write_policy,
 	);
 	if (!check) {
-		throw data403('You do not have permission to write to the ACL policy');
+		throw data('You do not have permission to write to the ACL policy', {
+			status: 403,
+		});
 	}
 
 	// Try to write to the ACL policy via the API or via config file (TODO).
 	const formData = await request.formData();
 	const policyData = formData.get('policy')?.toString();
 	if (!policyData) {
-		throw data400('Missing `policy` in the form data.');
+		throw data('Missing `policy` in the form data.', {
+			status: 400,
+		});
 	}
 
+	const api = context.hsApi.getRuntimeClient(session.api_key);
 	try {
-		const { policy, updatedAt } = await context.client.put<{
-			policy: string;
-			updatedAt: string;
-		}>('v1/policy', session.api_key, {
-			policy: policyData,
-		});
-
+		const { policy, updatedAt } = await api.setPolicy(policyData);
 		return data({
 			success: true,
 			error: undefined,
@@ -42,68 +37,99 @@ export async function aclAction({
 			updatedAt,
 		});
 	} catch (error) {
-		// This means Headscale returned a protobuf error to us
-		// It also means we 100% know this is in database mode
-		if (error instanceof ResponseError && error.responseObject?.message) {
-			const message = error.responseObject.message as string;
-			// This is stupid, refer to the link
-			// https://github.com/juanfont/headscale/blob/main/hscontrol/types/policy.go
-			if (message.includes('update is disabled')) {
-				// This means the policy is not writable
-				throw data403('Policy is not writable');
+		if (isDataWithApiError(error)) {
+			const rawData = error.data.rawData;
+			// https://github.com/juanfont/headscale/blob/c4600346f9c29b514dc9725ac103efb9d0381f23/hscontrol/types/policy.go#L11
+			if (rawData.includes('update is disabled')) {
+				throw data('Policy is not writable', { status: 403 });
 			}
 
-			// https://github.com/juanfont/headscale/blob/main/hscontrol/policy/v1/acls.go#L81
-			if (message.includes('parsing hujson')) {
-				// This means the policy was invalid, return a 400
-				// with the actual error message from Headscale
-				const cutIndex = message.indexOf('err: hujson:');
-				const trimmed =
-					cutIndex > -1
-						? `Syntax error: ${message.slice(cutIndex + 12)}`
-						: message;
+			const message =
+				error.data.data != null &&
+				'message' in error.data.data &&
+				typeof error.data.data.message === 'string'
+					? error.data.data.message
+					: undefined;
 
-				return data(
-					{
-						success: false,
-						error: trimmed,
-						policy: undefined,
-						updatedAt: undefined,
-					},
-					400,
-				);
+			if (message == null) {
+				throw error;
 			}
 
-			if (message.includes('unmarshalling policy')) {
-				// This means the policy was invalid, return a 400
-				// with the actual error message from Headscale
-				const cutIndex = message.indexOf('err:');
-				const trimmed =
-					cutIndex > -1
-						? `Syntax error: ${message.slice(cutIndex + 5)}`
-						: message;
+			// Starting in Headscale 0.27.0 the ACLs parsing was changed meaning
+			// we need to reference other error messages based on API version.
+			if (context.hsApi.clientHelpers.isAtleast('0.27.0')) {
+				if (message.includes('parsing HuJSON:')) {
+					const cutIndex = message.indexOf('parsing HuJSON:');
+					const trimmed =
+						cutIndex > -1
+							? `Syntax error: ${message.slice(cutIndex + 16).trim()}`
+							: message;
 
-				return data(
-					{
-						success: false,
-						error: trimmed,
-						policy: undefined,
-						updatedAt: undefined,
-					},
-					400,
-				);
-			}
+					return data(
+						{
+							success: false,
+							error: trimmed,
+							policy: undefined,
+							updatedAt: undefined,
+						},
+						400,
+					);
+				}
 
-			if (message.includes('empty policy')) {
-				return data(
-					{
-						success: false,
-						error: 'Policy error: Supplied policy was empty',
-						policy: undefined,
-						updatedAt: undefined,
-					},
-					400,
-				);
+				if (message.includes('parsing policy from bytes:')) {
+					const cutIndex = message.indexOf('parsing policy from bytes:');
+					const trimmed =
+						cutIndex > -1
+							? `Syntax error: ${message.slice(cutIndex + 26).trim()}`
+							: message;
+
+					return data(
+						{
+							success: false,
+							error: trimmed,
+							policy: undefined,
+							updatedAt: undefined,
+						},
+						400,
+					);
+				}
+			} else {
+				// Pre-0.27.0 error messages
+				if (message.includes('parsing hujson')) {
+					const cutIndex = message.indexOf('err: hujson:');
+					const trimmed =
+						cutIndex > -1
+							? `Syntax error: ${message.slice(cutIndex + 12)}`
+							: message;
+
+					return data(
+						{
+							success: false,
+							error: trimmed,
+							policy: undefined,
+							updatedAt: undefined,
+						},
+						400,
+					);
+				}
+
+				if (message.includes('unmarshalling policy')) {
+					const cutIndex = message.indexOf('err:');
+					const trimmed =
+						cutIndex > -1
+							? `Syntax error: ${message.slice(cutIndex + 5)}`
+							: message;
+
+					return data(
+						{
+							success: false,
+							error: trimmed,
+							policy: undefined,
+							updatedAt: undefined,
+						},
+						400,
+					);
+				}
 			}
 		}
 

@@ -3,7 +3,7 @@ import type { User } from './User';
 export interface PreAuthKey {
 	id: string;
 	key: string;
-	user: User;
+	user: User | null;
 	reusable: boolean;
 	ephemeral: boolean;
 	used: boolean;

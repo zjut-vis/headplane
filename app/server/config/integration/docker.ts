@@ -1,9 +1,9 @@
-import { constants, access } from 'node:fs/promises';
+import { access, constants } from 'node:fs/promises';
 import { setTimeout } from 'node:timers/promises';
+import { type } from 'arktype';
 import { Client } from 'undici';
-import { ApiClient } from '~/server/headscale/api-client';
+import type { RuntimeApiClient } from '~/server/headscale/api/endpoints';
 import log from '~/utils/log';
-import type { HeadplaneConfig } from '../schema';
 import { Integration } from './abstract';
 
 interface DockerContainer {
@@ -11,14 +11,35 @@ interface DockerContainer {
 	Names: string[];
 }
 
-type T = NonNullable<HeadplaneConfig['integration']>['docker'];
-export default class DockerIntegration extends Integration<T> {
+const configSchema = {
+	full: type({
+		enabled: 'boolean',
+		container_name: 'string?',
+		container_label: 'string = "me.tale.headplane.target=headscale"',
+		socket: 'string = "unix:///var/run/docker.sock"',
+	}),
+
+	partial: type({
+		enabled: 'boolean?',
+		container_name: 'string?',
+		container_label: 'string?',
+		socket: 'string?',
+	}).partial(),
+};
+
+export default class DockerIntegration extends Integration<
+	typeof configSchema.full.infer
+> {
 	private maxAttempts = 10;
 	private client: Client | undefined;
 	private containerId: string | undefined;
 
 	get name() {
 		return 'Docker';
+	}
+
+	static get configSchema() {
+		return configSchema;
 	}
 
 	async getContainerName(label: string, value: string): Promise<string> {
@@ -60,7 +81,7 @@ export default class DockerIntegration extends Integration<T> {
 		// Basic configuration check, the name overrides the container_label
 		// selector because of legacy support.
 		const { container_name, container_label } = this.context;
-		if (container_name.length === 0 && container_label.length === 0) {
+		if (container_name?.length === 0 && container_label.length === 0) {
 			log.error(
 				'config',
 				'Missing a Docker `container_name` or `container_label`',
@@ -94,7 +115,7 @@ export default class DockerIntegration extends Integration<T> {
 
 			try {
 				log.info('config', 'Checking API: %s', fetchU);
-				await fetch(new URL('/v1.30/version', fetchU).href);
+				await fetch(new URL('/v1.44/version', fetchU).href);
 			} catch (error) {
 				log.error('config', 'Failed to connect to Docker API: %s', error);
 				log.debug('config', 'Connection error: %o', error);
@@ -127,7 +148,7 @@ export default class DockerIntegration extends Integration<T> {
 
 		const qp = new URLSearchParams({
 			filters: JSON.stringify(
-				container_name.length > 0
+				container_name != null && container_name.length > 0
 					? { name: [container_name] }
 					: { label: [container_label] },
 			),
@@ -140,7 +161,7 @@ export default class DockerIntegration extends Integration<T> {
 		);
 		const res = await this.client.request({
 			method: 'GET',
-			path: `/v1.30/containers/json?${qp.toString()}`,
+			path: `/v1.44/containers/json?${qp.toString()}`,
 		});
 
 		if (res.statusCode !== 200) {
@@ -151,7 +172,7 @@ export default class DockerIntegration extends Integration<T> {
 
 		const data = (await res.body.json()) as DockerContainer[];
 		if (data.length > 1) {
-			if (container_name.length > 0) {
+			if (container_name != null && container_name.length > 0) {
 				log.error(
 					'config',
 					`Found multiple containers with name ${container_name}`,
@@ -167,7 +188,7 @@ export default class DockerIntegration extends Integration<T> {
 		}
 
 		if (data.length === 0) {
-			if (container_name.length > 0) {
+			if (container_name != null && container_name.length > 0) {
 				log.error(
 					'config',
 					`No container found with the name ${container_name}`,
@@ -193,7 +214,7 @@ export default class DockerIntegration extends Integration<T> {
 		return this.client !== undefined && this.containerId !== undefined;
 	}
 
-	async onConfigChange(client: ApiClient) {
+	async onConfigChange(client: RuntimeApiClient) {
 		if (!this.client) {
 			return;
 		}
@@ -211,7 +232,7 @@ export default class DockerIntegration extends Integration<T> {
 
 			const response = await this.client.request({
 				method: 'POST',
-				path: `/v1.30/containers/${this.containerId}/restart`,
+				path: `/v1.44/containers/${this.containerId}/restart`,
 			});
 
 			if (response.statusCode !== 204) {
@@ -233,14 +254,14 @@ export default class DockerIntegration extends Integration<T> {
 		while (attempts <= this.maxAttempts) {
 			try {
 				log.debug('config', 'Checking Headscale status (attempt %d)', attempts);
-				const status = await client.healthcheck();
+				const status = await client.isHealthy();
 				if (status === false) {
 					throw new Error('Headscale is not running');
 				}
 
 				log.info('config', 'Headscale is up and running');
 				return;
-			} catch (error) {
+			} catch {
 				if (attempts < this.maxAttempts) {
 					attempts++;
 					await setTimeout(1000);

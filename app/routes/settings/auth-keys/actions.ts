@@ -1,118 +1,99 @@
-import { ActionFunctionArgs, data } from 'react-router';
-import { LoadContext } from '~/server';
-import { Capabilities } from '~/server/web/roles';
-import { PreAuthKey } from '~/types';
+import { data } from "react-router";
 
-export async function authKeysAction({
-	request,
-	context,
-}: ActionFunctionArgs<LoadContext>) {
-	const session = await context.sessions.auth(request);
-	const check = await context.sessions.check(
-		request,
-		Capabilities.generate_authkeys,
-	);
+import { Capabilities } from "~/server/web/roles";
 
-	if (!check) {
-		throw data('You do not have permission to manage pre-auth keys', {
-			status: 403,
-		});
-	}
+import type { Route } from "./+types/overview";
 
-	const formData = await request.formData();
-	const apiKey = session.api_key;
-	const action = formData.get('action_id')?.toString();
-	if (!action) {
-		throw data('Missing `action_id` in the form data.', {
-			status: 400,
-		});
-	}
+export async function authKeysAction({ request, context }: Route.ActionArgs) {
+  const session = await context.sessions.auth(request);
+  const check = await context.sessions.check(request, Capabilities.generate_authkeys);
 
-	switch (action) {
-		case 'add_preauthkey':
-			return await addPreAuthKey(formData, apiKey, context);
-		case 'expire_preauthkey':
-			return await expirePreAuthKey(formData, apiKey, context);
-		default:
-			return data('Invalid action', {
-				status: 400,
-			});
-	}
-}
+  if (!check) {
+    throw data("You do not have permission to manage pre-auth keys", {
+      status: 403,
+    });
+  }
 
-async function addPreAuthKey(
-	formData: FormData,
-	apiKey: string,
-	context: LoadContext,
-) {
-	const user = formData.get('user_id')?.toString();
-	if (!user) {
-		return data('Missing `user_id` in the form data.', {
-			status: 400,
-		});
-	}
+  const formData = await request.formData();
+  const api = context.hsApi.getRuntimeClient(session.api_key);
+  const action = formData.get("action_id")?.toString();
+  if (!action) {
+    throw data("Missing `action_id` in the form data.", {
+      status: 400,
+    });
+  }
 
-	const expiry = formData.get('expiry')?.toString();
-	if (!expiry) {
-		return data('Missing `expiry` in the form data.', {
-			status: 400,
-		});
-	}
+  switch (action) {
+    case "add_preauthkey": {
+      const user = formData.get("user_id")?.toString() || null;
+      const aclTagsRaw = formData.get("acl_tags")?.toString() || "";
+      const aclTags = aclTagsRaw
+        .split(",")
+        .map((t) => t.trim())
+        .filter((t) => t.length > 0);
 
-	const reusable = formData.get('reusable')?.toString();
-	if (!reusable) {
-		return data('Missing `reusable` in the form data.', {
-			status: 400,
-		});
-	}
+      if (!user && aclTags.length === 0) {
+        return data("Must specify either a user or ACL tags.", {
+          status: 400,
+        });
+      }
 
-	const ephemeral = formData.get('ephemeral')?.toString();
-	if (!ephemeral) {
-		return data('Missing `ephemeral` in the form data.', {
-			status: 400,
-		});
-	}
+      const expiry = formData.get("expiry")?.toString();
+      if (!expiry) {
+        return data("Missing `expiry` in the form data.", {
+          status: 400,
+        });
+      }
 
-	// Extract the first "word" from expiry which is the day number
-	// Calculate the date X days from now using the day number
-	const day = Number(expiry.toString().split(' ')[0]);
-	const date = new Date();
-	date.setDate(date.getDate() + day);
+      const reusable = formData.get("reusable")?.toString();
+      if (!reusable) {
+        return data("Missing `reusable` in the form data.", {
+          status: 400,
+        });
+      }
 
-	await context.client.post<{ preAuthKey: PreAuthKey }>(
-		'v1/preauthkey',
-		apiKey,
-		{
-			user,
-			ephemeral: ephemeral === 'on',
-			reusable: reusable === 'on',
-			expiration: date.toISOString(),
-			aclTags: [], // TODO
-		},
-	);
+      const ephemeral = formData.get("ephemeral")?.toString();
+      if (!ephemeral) {
+        return data("Missing `ephemeral` in the form data.", {
+          status: 400,
+        });
+      }
 
-	return data('Pre-auth key created');
-}
+      const day = Number(expiry.toString().split(" ")[0]);
+      const date = new Date();
+      date.setDate(date.getDate() + day);
 
-async function expirePreAuthKey(
-	formData: FormData,
-	apiKey: string,
-	context: LoadContext,
-) {
-	const key = formData.get('key')?.toString();
-	if (!key) {
-		return data('Missing `key` in the form data.', {
-			status: 400,
-		});
-	}
+      const key = await api.createPreAuthKey(
+        user,
+        ephemeral === "on",
+        reusable === "on",
+        date,
+        aclTags.length > 0 ? aclTags : null,
+      );
 
-	const user = formData.get('user_id')?.toString();
-	if (!user) {
-		return data('Missing `user_id` in the form data.', {
-			status: 400,
-		});
-	}
+      return data({ success: true as const, key: key.key });
+    }
+    case "expire_preauthkey": {
+      const key = formData.get("key")?.toString();
+      if (!key) {
+        return data("Missing `key` in the form data.", {
+          status: 400,
+        });
+      }
 
-	await context.client.post('v1/preauthkey/expire', apiKey, { user, key });
-	return data('Pre-auth key expired');
+      const user = formData.get("user_id")?.toString();
+      if (!user) {
+        return data("Missing `user_id` in the form data.", {
+          status: 400,
+        });
+      }
+
+      await api.expirePreAuthKey(user, key);
+      return data("Pre-auth key expired");
+    }
+    default:
+      return data("Invalid action", {
+        status: 400,
+      });
+  }
 }

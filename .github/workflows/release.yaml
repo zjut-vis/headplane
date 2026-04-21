@@ -23,9 +23,9 @@ jobs:
       matrix:
         include:
           - target: final
-            tag_suffix: ''
+            tag_suffix: ""
           - target: debug-shell
-            tag_suffix: '-shell'
+            tag_suffix: "-shell"
 
     steps:
       - name: Check out the repo
@@ -70,6 +70,7 @@ jobs:
           cache-to: type=gha,mode=max
           build-args: |
             IMAGE_TAG=ghcr.io/${{ github.repository }}:${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.version'] }}
+            HEADPLANE_VERSION=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.version'] }}
       - name: Attestation Provenance for ${{ fromJSON(steps.meta.outputs.json).tags[0] }}
         uses: actions/attest-build-provenance@v2
         id: attest
