@@ -17,6 +17,8 @@ import { loadHeadplaneWASM } from "./wasm.client";
 
 const WASM_MODULE_URL = `${__PREFIX__}/hp_ssh.wasm`;
 const WASM_HELPER_URL = `${__PREFIX__}/wasm_exec.js`;
+const WASM_MODULE_ASSET_PATH = "/hp_ssh.wasm";
+const WASM_HELPER_ASSET_PATH = "/wasm_exec.js";
 
 export const shouldRevalidate: ShouldRevalidateFunction = () => {
   return false;
@@ -105,7 +107,7 @@ function generateHostname(username: string) {
 export const links: Route.LinksFunction = () => [
   {
     rel: "preload",
-    href: WASM_MODULE_URL,
+    href: WASM_MODULE_ASSET_PATH,
     as: "fetch",
     type: "application/wasm",
     crossOrigin: "anonymous",
@@ -115,7 +117,7 @@ export const links: Route.LinksFunction = () => [
 export const handle: ExternalScriptsHandle = {
   scripts: [
     {
-      src: WASM_HELPER_URL,
+      src: WASM_HELPER_ASSET_PATH,
       crossOrigin: "anonymous",
       preload: true,
     },
@@ -168,7 +170,7 @@ function SSHConsole({
     let cancelled = false;
 
     console.log("[ssh] Loading WASM factory");
-    loadHeadplaneWASM().then((create) => {
+    loadHeadplaneWASM(WASM_MODULE_URL).then((create) => {
       console.log("[ssh] Factory loaded, creating IPN", create);
 
       if (cancelled) {

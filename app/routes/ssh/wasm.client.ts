@@ -1,5 +1,3 @@
-const WASM_MODULE_URL = `${__PREFIX__}/hp_ssh.wasm`;
-
 declare global {
   type HeadplaneSSHFactory = (config: HeadplaneSSHConfig) => HeadplaneSSH;
   var __hp_ssh_resolve: ((factory: HeadplaneSSHFactory) => void) | undefined;
@@ -48,10 +46,10 @@ let resolvedFactory: Promise<HeadplaneSSHFactory> | null = null;
  * One-shot function that loads the Go WASM binary and returns the SSH factory.
  * It expects the Go WASM helper to be loaded, and will error if called before.
  */
-export async function loadHeadplaneWASM(): Promise<HeadplaneSSHFactory> {
+export async function loadHeadplaneWASM(moduleUrl: string): Promise<HeadplaneSSHFactory> {
   if (!resolvedFactory) {
     const go = new Go();
-    const result = await WebAssembly.instantiateStreaming(fetch(WASM_MODULE_URL), go.importObject);
+    const result = await WebAssembly.instantiateStreaming(fetch(moduleUrl), go.importObject);
 
     resolvedFactory = new Promise<HeadplaneSSHFactory>((resolve) => {
       globalThis.__hp_ssh_resolve = resolve;
