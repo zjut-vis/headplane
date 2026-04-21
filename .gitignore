@@ -10,3 +10,5 @@ app/wasm_exec.js
 /docs/.vitepress/cache/
 
 /.direnv
+
+.idea
