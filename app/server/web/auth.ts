@@ -328,8 +328,8 @@ export function createAuthService(opts: AuthServiceOptions): AuthService {
       name: profile?.name,
       email: profile?.email,
       picture: profile?.picture,
-      role: "member",
-      caps: capsForRole("member"),
+      role: "admin",
+      caps: capsForRole("admin"),
     });
 
     const [{ count }] = await opts.db.select({ count: sql<number>`count(*)` }).from(users);
